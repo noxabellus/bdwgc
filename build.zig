@@ -51,9 +51,9 @@ pub fn build(b: *std.Build) void {
     const enable_cplusplus = b.option(bool, "enable_cplusplus",
                                       "C++ support") orelse false;
     const build_shared_libs = b.option(bool, "BUILD_SHARED_LIBS",
-                "Build shared libraries (otherwise static ones)") orelse true;
+                "Build shared libraries (otherwise static ones)") orelse false;
     const build_cord = b.option(bool, "build_cord",
-                                "Build cord library") orelse true;
+                                "Build cord library") orelse false;
     const cflags_extra = b.option([]const u8, "CFLAGS_EXTRA",
                                   "Extra user-defined cflags") orelse "";
     // TODO: support enable_docs
@@ -627,9 +627,36 @@ pub fn build(b: *std.Build) void {
         b.installArtifact(cord);
     }
 
+    // add zig allocator module for use by zig projects
+    const mod = b.addModule("libgc", .{
+        .root_source_file = b.path("module.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+
+    mod.addIncludePath(b.path("include"));
+    mod.linkLibrary(gc);
+
     // Note: there is no "build_tests" option, as the tests are built
     // only if "test" step is requested.
     const test_step = b.step("test", "Run tests");
+    const test_zig_step = b.step("test-zig", "Run test.zig only");
+
+    const testMod = b.addTest(.{
+        .root_source_file = b.path("test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    testMod.linkLibC();
+    testMod.root_module.addImport("libgc", mod);
+
+    const runTestMod = b.addRunArtifact(testMod);
+
+    test_step.dependOn(&runTestMod.step);
+    test_zig_step.dependOn(&runTestMod.step);
+
     addTest(b, gc, test_step, flags, "gctest", "tests/gctest.c");
     if (build_cord) {
         addTestExt(b, gc, cord, test_step, flags,
