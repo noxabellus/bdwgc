@@ -8,7 +8,7 @@
         "README.md",
 
         "build.zig.zon",
-        
+
         "build.zig",
         "module.zig",
         "test.zig",
@@ -36,6 +36,8 @@
         "gc_dlopen.c",
         "pthread_start.c",
         "pthread_support.c",
+        "darwin_stop_world.c",
+        "pthread_stop_world.c",
         "specific.c",
         "thread_local_alloc.c",
         "win32_threads.c",
