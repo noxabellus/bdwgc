@@ -128,6 +128,8 @@ pub fn build(b: *std.Build) void {
     // TODO: support enable_emscripten_asyncify
     const install_headers = b.option(bool, "install_headers",
         "Install header and pkg-config metadata files") orelse true;
+    const pointer_mask = b.option(usize, "pointer_mask",
+        "Pointer mask value");
     // TODO: support with_libatomic_ops, without_libatomic_ops
 
     var gc = b.addStaticLibrary(.{
@@ -186,6 +188,11 @@ pub fn build(b: *std.Build) void {
         "reclaim.c",
         "typd_mlc.c",
     }) catch unreachable;
+
+    if (pointer_mask) |mask| {
+        const buf = std.fmt.allocPrint(b.allocator, "-D POINTER_MASK=0x{x:0>16}", .{ mask }) catch unreachable;
+        flags.append(buf) catch unreachable;
+    }
 
     if (enable_threads) {
         flags.append("-D GC_THREADS") catch unreachable;

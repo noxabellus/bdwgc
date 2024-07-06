@@ -30,6 +30,7 @@ const Allocator = std.mem.Allocator;
 
 const gc = @cImport({
     @cInclude("gc.h");
+    @cInclude("gc/gc_mark.h");
 });
 
 /// Returns the Allocator used for APIs in Zig
@@ -81,6 +82,16 @@ pub fn collectLittle() u8 {
 /// Enables leak-finding mode. See the libgc docs for more details.
 pub fn setFindLeak(v: bool) void {
     return gc.GC_set_find_leak(@intFromBool(v));
+}
+
+/// Get the GC pointer mask
+pub fn getPointerMask() usize {
+    return gc.GC_get_pointer_mask();
+}
+
+/// Set the GC pointer mask
+pub fn setPointerMask(mask: usize) void {
+    return gc.GC_set_pointer_mask(mask);
 }
 
 // TODO there are so many more functions to add here
