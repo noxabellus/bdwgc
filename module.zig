@@ -94,6 +94,39 @@ pub fn setPointerMask(mask: usize) void {
     return gc.GC_set_pointer_mask(mask);
 }
 
+/// The type of function used with `registerFinalizer` etc
+pub const Finalizer = *const fn (?*anyopaque, ?*anyopaque) callconv(.C) void;
+
+/// Set a finalizer for a GC pointer
+pub fn registerFinalizer(object: ?*anyopaque, finalizer: ?Finalizer, user_data: ?*anyopaque, old_finalizer: ?*?Finalizer, old_user_data: ?*?*anyopaque) void {
+    return gc.GC_register_finalizer(object, finalizer, user_data, old_finalizer, old_user_data);
+}
+
+/// Set a finalizer for a GC pointer which will ignore self-cycles
+pub fn registerFinalizerIgnoreSelf(object: ?*anyopaque, finalizer: ?Finalizer, user_data: ?*anyopaque, old_finalizer: ?*?Finalizer, old_user_data: ?*?*anyopaque) void {
+    return gc.GC_register_finalizer_ignore_self(object, finalizer, user_data, old_finalizer, old_user_data);
+}
+
+/// Set a finaliz for a GC pointer r which will ignore all cycles
+pub fn registerFinalizerNoOrder(object: ?*anyopaque, finalizer: ?Finalizer, user_data: ?*anyopaque, old_finalizer: ?*?Finalizer, old_user_data: ?*?*anyopaque) void {
+    return gc.GC_register_finalizer_no_order(object, finalizer, user_data, old_finalizer, old_user_data);
+}
+
+/// Set a finalizer for a GC pointer which will only run when the object is most definitely unreachable, even by other finalizers
+pub fn registerFinalizerUnreachable(object: ?*anyopaque, finalizer: ?Finalizer, user_data: ?*anyopaque, old_finalizer: ?*?Finalizer, old_user_data: ?*?*anyopaque) void {
+    return gc.GC_register_finalizer_unreachable(object, finalizer, user_data, old_finalizer, old_user_data);
+}
+
+/// Attempt to run any enqueued GC finalizers
+pub fn invokeFinalizers() c_int {
+    return gc.GC_invoke_finalizers();
+}
+
+/// Determine whether there are finalizers to be run
+pub fn shouldInvokeFinalizers() bool {
+    return gc.GC_should_invoke_finalizers() != 0;
+}
+
 // TODO there are so many more functions to add here
 // from gc.h, just add em as they're useful.
 
