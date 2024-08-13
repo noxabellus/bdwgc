@@ -177,11 +177,12 @@ typedef int GC_bool;
 #endif
 
 #if defined(M68K) && defined(__GNUC__)
-  /* By default, __alignof__(word) is 2 on m68k.  Use this attribute to */
-  /* have proper word alignment (i.e. 4-byte on a 32-bit arch).         */
-# define GC_ATTR_WORD_ALIGNED __attribute__((__aligned__(sizeof(word))))
+  /* By default, __alignof__(void*) is 2 on m68k.  Use this         */
+  /* attribute to have the proper pointer alignment (i.e. 4-byte    */
+  /* one on the given 32-bit architecture).                         */
+# define GC_ATTR_PTRT_ALIGNED __attribute__((__aligned__(sizeof(ptr_t))))
 #else
-# define GC_ATTR_WORD_ALIGNED /* empty */
+# define GC_ATTR_PTRT_ALIGNED /* empty */
 #endif
 
   typedef GC_uintptr_t GC_funcptr_uint;
@@ -347,6 +348,10 @@ typedef struct hblkhdr hdr;
 # define MAKE_HOTTER(p,d) (void)((p) -= (d))
 #endif /* !STACK_GROWS_UP */
 
+/* Clear/set flags (given by a mask) in a pointer.  */
+#define CPTR_CLEAR_FLAGS(p, mask) (ptr_t)((word)(p) & ~(word)(mask))
+#define CPTR_SET_FLAGS(p, mask) (ptr_t)((word)(p) | (word)(mask))
+
 #if defined(AMIGA) && defined(__SASC)
 #   define GC_FAR __far
 #else
@@ -465,7 +470,7 @@ EXTERN_C_BEGIN
 #   endif
 #   if (NFRAMES * (NARGS + 1)) % 2 == 1
       /* Likely alignment problem. */
-      word ci_dummy;
+      ptr_t ci_dummy;
 #   endif
   };
 
@@ -883,44 +888,25 @@ EXTERN_C_BEGIN
 /*                               */
 /*********************************/
 
-#define WORDS_TO_BYTES(x) ((x) * sizeof(word))
-#define BYTES_TO_WORDS(x) ((x) / sizeof(word))
 #define modWORDSZ(n) ((n) & (CPP_WORDSZ-1)) /* n mod size of word */
 #define divWORDSZ(n) ((n) / CPP_WORDSZ)
 
 #define SIGNB ((word)1 << (CPP_WORDSZ-1))
+#define SIZET_SIGNB (GC_SIZE_MAX ^ (GC_SIZE_MAX >> 1))
 
-#if CPP_WORDSZ / 8 != ALIGNMENT
+#if CPP_PTRSZ / 8 != ALIGNMENT
 # define UNALIGNED_PTRS
 #endif
 
-#if GC_GRANULE_BYTES == 4
-# define BYTES_TO_GRANULES(n) ((n)>>2)
-# define GRANULES_TO_BYTES(n) ((n)<<2)
-# define GRANULES_TO_WORDS(n) BYTES_TO_WORDS(GRANULES_TO_BYTES(n))
-#elif GC_GRANULE_BYTES == 8
-# define BYTES_TO_GRANULES(n) ((n)>>3)
-# define GRANULES_TO_BYTES(n) ((n)<<3)
-# if CPP_WORDSZ == 64
-#   define GRANULES_TO_WORDS(n) (n)
-# elif CPP_WORDSZ == 32
-#   define GRANULES_TO_WORDS(n) ((n)<<1)
-# else
-#   define GRANULES_TO_WORDS(n) BYTES_TO_WORDS(GRANULES_TO_BYTES(n))
-# endif
-#elif GC_GRANULE_BYTES == 16
-# define BYTES_TO_GRANULES(n) ((n)>>4)
-# define GRANULES_TO_BYTES(n) ((n)<<4)
-# if CPP_WORDSZ == 64
-#   define GRANULES_TO_WORDS(n) ((n)<<1)
-# elif CPP_WORDSZ == 32
-#   define GRANULES_TO_WORDS(n) ((n)<<2)
-# else
-#   define GRANULES_TO_WORDS(n) BYTES_TO_WORDS(GRANULES_TO_BYTES(n))
-# endif
-#else
-# error Bad GC_GRANULE_BYTES value
-#endif
+#define BYTES_TO_GRANULES(lb) ((lb) / GC_GRANULE_BYTES)
+#define GRANULES_TO_BYTES(lg) ((lg) * GC_GRANULE_BYTES)
+#define BYTES_TO_PTRS(lb) ((lb) / sizeof(ptr_t))
+#define PTRS_TO_BYTES(lpw) ((lpw) * sizeof(ptr_t))
+#define GRANULES_TO_PTRS(lg) ((lg) * GC_GRANULE_PTRS)
+
+/* Convert size in bytes to that in pointers rounding up (but   */
+/* not adding extra byte at end).                               */
+#define BYTES_TO_PTRS_ROUNDUP(lb) BYTES_TO_PTRS((lb) + sizeof(ptr_t) - 1)
 
 /*********************/
 /*                   */
@@ -970,7 +956,7 @@ EXTERN_C_BEGIN
 #define LOG_HBLKSIZE ((size_t)CPP_LOG_HBLKSIZE)
 #define HBLKSIZE ((size_t)1 << CPP_LOG_HBLKSIZE)
 
-#define GC_SQRT_SIZE_MAX ((((size_t)1) << (CPP_WORDSZ / 2)) - 1)
+#define GC_SQRT_SIZE_MAX ((((size_t)1) << (sizeof(size_t) * 8 / 2)) - 1)
 
 /*  Max size objects supported by free list (larger objects are */
 /*  allocated directly with allchblk(), by rounding to the next */
@@ -1057,7 +1043,7 @@ EXTERN_C_BEGIN
 #define PHT_SIZE (PHT_ENTRIES > CPP_WORDSZ ? PHT_ENTRIES / CPP_WORDSZ : 1)
 typedef word page_hash_table[PHT_SIZE];
 
-#define PHT_HASH(addr) ((ADDR(addr) >> LOG_HBLKSIZE) & (PHT_ENTRIES-1))
+#define PHT_HASH(p) ((size_t)((ADDR(p) >> LOG_HBLKSIZE) & (PHT_ENTRIES-1)))
 
 #define get_pht_entry_from_index(bl, index) \
                 (((bl)[divWORDSZ(index)] >> modWORDSZ(index)) & 1)
@@ -1071,7 +1057,7 @@ typedef word page_hash_table[PHT_SIZE];
   /* fault handler).                                                    */
 # define set_pht_entry_from_index_concurrent(bl, index) \
                 AO_or((volatile AO_t *)&(bl)[divWORDSZ(index)], \
-                      (AO_t)((word)1 << modWORDSZ(index)))
+                      (AO_t)1 << modWORDSZ(index))
 # ifdef MPROTECT_VDB
 #   define set_pht_entry_from_index_concurrent_volatile(bl, index) \
                 set_pht_entry_from_index_concurrent(bl, index)
@@ -1101,15 +1087,6 @@ typedef word page_hash_table[PHT_SIZE];
                 /* granules per object.  Otherwise, we only use the     */
                 /* initial group of mark bits, and it is safe to        */
                 /* allocate smaller header for large objects.           */
-
-union word_ptr_ao_u {
-  word w;
-  signed_word sw;
-  void *vp;
-# ifdef PARALLEL_MARK
-    volatile AO_t ao;
-# endif
-};
 
 /* We maintain layout maps for heap blocks containing objects of a given */
 /* size.  Each entry in this map describes a byte offset and has the     */
@@ -1160,13 +1137,14 @@ struct hblkhdr {
                                 /* LARGE_INV_SZ.                        */
 #     define LARGE_INV_SZ ((unsigned32)1 << 16)
 #   endif
-    word hb_sz; /* If in use, size in bytes, of objects in the block.   */
-                /* if free, the size in bytes of the whole block.       */
+    size_t hb_sz;
+                /* If in use, size in bytes, of objects in the block.   */
+                /* Otherwise, the size of the whole free block.         */
                 /* We assume that this is convertible to signed_word    */
                 /* without generating a negative result.  We avoid      */
                 /* generating free blocks larger than that.             */
-    word hb_descr;              /* object descriptor for marking.  See  */
-                                /* gc_mark.h.                           */
+    word hb_descr;              /* Object descriptor for marking.       */
+                                /* See gc_mark.h.                       */
 #   ifndef MARK_BIT_PER_OBJ
       unsigned short * hb_map;  /* Essentially a table of remainders    */
                                 /* mod BYTES_TO_GRANULES(hb_sz), except */
@@ -1214,7 +1192,12 @@ struct hblkhdr {
 #     define hb_marks _mark_byte_union._hb_marks
 #   else
 #     define HB_MARKS_SZ (MARK_BITS_PER_HBLK / CPP_WORDSZ + 1)
+#     if defined(PARALLEL_MARK) \
+         || (defined(THREAD_SANITIZER) && defined(THREADS))
+        volatile AO_t hb_marks[HB_MARKS_SZ];
+#     else
         word hb_marks[HB_MARKS_SZ];
+#     endif
 #   endif /* !USE_MARK_BYTES */
 };
 
@@ -1275,13 +1258,13 @@ struct exclusion {
 /* Under Win32, we need to do a better job of filtering overlaps, so    */
 /* we resort to sequential search, and pay the price.                   */
 struct roots {
-        ptr_t r_start;/* multiple of word size */
-        ptr_t r_end;  /* multiple of word size and greater than r_start */
+        ptr_t r_start;/* multiple of pointer size */
+        ptr_t r_end;  /* multiple of pointer size and greater than r_start */
 #       ifndef ANY_MSWIN
           struct roots * r_next;
 #       endif
         GC_bool r_tmp;
-                /* Delete before registering new dynamic libraries */
+                /* Delete before registering new dynamic libraries if set. */
 };
 
 #ifndef ANY_MSWIN
@@ -1312,10 +1295,12 @@ struct roots {
 #endif /* !MAX_HEAP_SECTS */
 
 typedef struct GC_ms_entry {
-    ptr_t mse_start;    /* First word of object, word-aligned one.      */
-    union word_ptr_ao_u mse_descr;
-                        /* Descriptor; low order two bits are tags,     */
-                        /* as described in gc_mark.h.                   */
+  ptr_t mse_start;      /* Beginning of object, pointer-aligned one.    */
+# ifdef PARALLEL_MARK
+    volatile AO_t mse_descr;
+# else
+    word mse_descr;     /* Descriptor; low order two bits are tags,     */
+# endif                 /* as described in gc_mark.h.                   */
 } mse;
 
 typedef int mark_state_t;   /* Current state of marking.                */
@@ -1327,7 +1312,7 @@ struct finalizable_object;
 
 struct dl_hashtbl_s {
     struct disappearing_link **head;
-    word entries;
+    size_t entries;
     unsigned log_size;
 };
 
@@ -1345,7 +1330,7 @@ union toggle_ref_u {
 
 /* Extended descriptors.  GC_typed_mark_proc understands these. */
 /* These are used for simple objects that are larger than what  */
-/* can be described by a BITMAP_BITS sized bitmap.              */
+/* can be described by a BITMAP_BITS-sized bitmap.              */
 typedef struct {
     word ed_bitmap; /* the least significant bit corresponds to first word. */
     GC_bool ed_continued;       /* next entry is continuation.  */
@@ -1456,7 +1441,6 @@ struct _GC_arrays {
 # ifdef PARALLEL_MARK
     mse *volatile _mark_stack_top;
         /* Updated only with the mark lock held, but read asynchronously. */
-        /* TODO: Use union to avoid casts to AO_t */
 # else
     mse *_mark_stack_top;
 # endif
@@ -1511,17 +1495,17 @@ struct _GC_arrays {
 #   define GC_main_local_mark_stack GC_arrays._main_local_mark_stack
     mse *_main_local_mark_stack;
 #   define GC_first_nonempty GC_arrays._first_nonempty
-    volatile AO_t _first_nonempty;
+    volatile ptr_t _first_nonempty;
                         /* Lowest entry on mark stack that may be       */
                         /* nonempty. Updated only by initiating thread. */
 # endif
-# define GC_mark_stack_size GC_arrays._mark_stack_size
-  size_t _mark_stack_size;
-# define GC_mark_state GC_arrays._mark_state
-  mark_state_t _mark_state; /* Initialized to MS_NONE (0). */
 # ifdef ENABLE_TRACE
 #   define GC_trace_ptr GC_arrays._trace_ptr
     ptr_t _trace_ptr;
+# endif
+# if CPP_PTRSZ > CPP_WORDSZ
+#   define GC_noop_sink_ptr GC_arrays._noop_sink_ptr
+    volatile ptr_t _noop_sink_ptr;
 # endif
 # define GC_noop_sink GC_arrays._noop_sink
 # if defined(AO_HAVE_store) && defined(THREAD_SANITIZER)
@@ -1529,13 +1513,17 @@ struct _GC_arrays {
 # else
     volatile word _noop_sink;
 # endif
+# define GC_mark_stack_size GC_arrays._mark_stack_size
+  size_t _mark_stack_size;
+# define GC_mark_state GC_arrays._mark_state
+  mark_state_t _mark_state; /* Initialized to MS_NONE (0). */
 # define GC_capacity_heap_sects GC_arrays._capacity_heap_sects
   size_t _capacity_heap_sects;
 # define GC_n_heap_sects GC_arrays._n_heap_sects
-  word _n_heap_sects;   /* Number of separately added heap sections.    */
+  size_t _n_heap_sects; /* number of separately added heap sections */
 # ifdef ANY_MSWIN
 #   define GC_n_heap_bases GC_arrays._n_heap_bases
-    word _n_heap_bases; /* See GC_heap_bases.   */
+    size_t _n_heap_bases; /* see GC_heap_bases[] */
 # endif
 # ifdef USE_PROC_FOR_LIBRARIES
 #   define GC_n_memory GC_arrays._n_memory
@@ -1546,7 +1534,7 @@ struct _GC_arrays {
     ptr_t *_gcjobjfreelist;
 # endif
 # define GC_fo_entries GC_arrays._fo_entries
-  word _fo_entries;
+  size_t _fo_entries;
 # ifndef GC_NO_FINALIZATION
 #   define GC_dl_hashtbl GC_arrays._dl_hashtbl
 #   define GC_fnlz_roots GC_arrays._fnlz_roots
@@ -1577,7 +1565,7 @@ struct _GC_arrays {
 # endif
 # define n_root_sets GC_arrays._n_root_sets
 # define GC_excl_table_entries GC_arrays._excl_table_entries
-  int _n_root_sets;     /* GC_static_roots[0..n_root_sets) contains the */
+  size_t _n_root_sets;  /* GC_static_roots[0..n_root_sets) contains the */
                         /* valid root sets.                             */
   size_t _excl_table_entries;   /* Number of entries in use.    */
 # define GC_ed_size GC_arrays._ed_size
@@ -1591,9 +1579,9 @@ struct _GC_arrays {
         /* Table of user-defined mark procedures.  There is     */
         /* a small number of these, which can be referenced     */
         /* by DS_PROC mark descriptors.  See gc_mark.h.         */
-  char _modws_valid_offsets[sizeof(word)];
-                                /* GC_valid_offsets[i] ==>                */
-                                /* GC_modws_valid_offsets[i%sizeof(word)] */
+  char _modws_valid_offsets[sizeof(ptr_t)];
+                        /* GC_valid_offsets[i] ==>                  */
+                        /* GC_modws_valid_offsets[i%sizeof(ptr_t)]  */
 # ifndef ANY_MSWIN
 #   define GC_root_index GC_arrays._root_index
     struct roots * _root_index[RT_SIZE];
@@ -1885,27 +1873,25 @@ struct GC_traced_stack_sect_s {
 #ifdef IA64
   /* Similar to GC_push_all_stack_sections() but for IA-64 registers store. */
   GC_INNER void GC_push_all_register_sections(ptr_t bs_lo, ptr_t bs_hi,
-                  int eager, struct GC_traced_stack_sect_s *traced_stack_sect);
+                        GC_bool eager,
+                        struct GC_traced_stack_sect_s *traced_stack_sect);
 #endif /* IA64 */
 
-/*  Marks are in a reserved area in                          */
-/*  each heap block.  Each word has one mark bit associated  */
-/*  with it. Only those corresponding to the beginning of an */
-/*  object are used.                                         */
+/* Marks are in a reserved area in each heap block.  Each object or */
+/* granule has one mark bit associated with it.  Only those         */
+/* corresponding to the beginning of an object are used.            */
 
-/* Mark bit operations */
+/* Mark bit operations. */
 
-/*
- * Retrieve, set, clear the n-th mark bit in a given heap block.
- *
- * (Recall that bit n corresponds to nth object or allocation granule
- * relative to the beginning of the block, including unused words)
- */
+/* Retrieve, set, clear the n-th mark bit in a given heap block.    */
+/* (Recall that bit n corresponds to n-th object or allocation      */
+/* granule relative to the beginning of the block, including unused */
+/* space.)                                                          */
 
 #ifdef USE_MARK_BYTES
-# define mark_bit_from_hdr(hhdr,n) ((hhdr)->hb_marks[n])
-# define set_mark_bit_from_hdr(hhdr,n) ((hhdr)->hb_marks[n] = 1)
-# define clear_mark_bit_from_hdr(hhdr,n) ((hhdr)->hb_marks[n] = 0)
+# define mark_bit_from_hdr(hhdr,n) ((hhdr) -> hb_marks[n])
+# define set_mark_bit_from_hdr(hhdr,n) (void)((hhdr) -> hb_marks[n] = 1)
+# define clear_mark_bit_from_hdr(hhdr,n) (void)((hhdr) -> hb_marks[n] = 0)
 #else
 /* Set mark bit correctly, even if mark bits may be concurrently        */
 /* accessed.                                                            */
@@ -1914,20 +1900,22 @@ struct GC_traced_stack_sect_s {
     /* mark_bit_from_hdr and set_mark_bit_from_hdr when n is different  */
     /* (alternatively, USE_MARK_BYTES could be used).  If TSan is off,  */
     /* AO_or() is used only if we set USE_MARK_BITS explicitly.         */
-#   define OR_WORD(addr, bits) AO_or((volatile AO_t *)(addr), (AO_t)(bits))
+#   define OR_WORD(addr, bits) AO_or(addr, bits)
 # else
 #   define OR_WORD(addr, bits) (void)(*(addr) |= (bits))
 # endif
 # define mark_bit_from_hdr(hhdr,n) \
-              (((hhdr)->hb_marks[divWORDSZ(n)] >> modWORDSZ(n)) & (word)1)
+            (((hhdr) -> hb_marks[divWORDSZ(n)] >> modWORDSZ(n)) & (word)1)
 # define set_mark_bit_from_hdr(hhdr,n) \
-              OR_WORD((hhdr)->hb_marks+divWORDSZ(n), (word)1 << modWORDSZ(n))
+            OR_WORD((hhdr) -> hb_marks + divWORDSZ(n), (word)1 << modWORDSZ(n))
 # define clear_mark_bit_from_hdr(hhdr,n) \
-              ((hhdr)->hb_marks[divWORDSZ(n)] &= ~((word)1 << modWORDSZ(n)))
+            (void)(((word *)CAST_AWAY_VOLATILE_PVOID( \
+                                    (hhdr) -> hb_marks))[divWORDSZ(n)] \
+                    &= ~((word)1 << modWORDSZ(n)))
 #endif /* !USE_MARK_BYTES */
 
 #ifdef MARK_BIT_PER_OBJ
-# define MARK_BIT_NO(offset, sz) (((word)(offset))/(sz))
+# define MARK_BIT_NO(offset, sz) ((offset) / (sz))
         /* Get the mark bit index corresponding to the given byte       */
         /* offset and size (in bytes).                                  */
 # define MARK_BIT_OFFSET(sz) 1
@@ -1935,7 +1923,7 @@ struct GC_traced_stack_sect_s {
 # define FINAL_MARK_BIT(sz) ((sz) > MAXOBJBYTES ? 1 : HBLK_OBJS(sz))
         /* Position of final, always set, mark bit.                     */
 #else
-# define MARK_BIT_NO(offset, sz) BYTES_TO_GRANULES((word)(offset))
+# define MARK_BIT_NO(offset, sz) BYTES_TO_GRANULES(offset)
 # define MARK_BIT_OFFSET(sz) BYTES_TO_GRANULES(sz)
 # define FINAL_MARK_BIT(sz) \
                 ((sz) > MAXOBJBYTES ? MARK_BITS_PER_HBLK \
@@ -2070,7 +2058,7 @@ GC_INNER void GC_with_callee_saves_pushed(GC_with_callee_saves_func fn,
                       NULL, NULL, 0, psz_ull) == -1)                        \
             ABORT_ARG1("Cannot get size of procedure stack",                \
                        ": errno= %d", errno);                               \
-          GC_ASSERT(*(psz_ull) > 0 && *(psz_ull) % sizeof(word) == 0);      \
+          GC_ASSERT(*(psz_ull) > 0 && *(psz_ull) % sizeof(ptr_t) == 0);     \
         } while (0)
 
 # ifdef THREADS
@@ -2142,14 +2130,14 @@ GC_INNER void GC_with_callee_saves_pushed(GC_with_callee_saves_func fn,
 #   error Unsupported -march for e2k target
 # endif
 
-# define LOAD_WORD_OR_CONTINUE(v, p) \
+# define LOAD_PTR_OR_CONTINUE(v, p) \
         { \
           int tag LOCAL_VAR_INIT_OK; \
           LOAD_TAGGED_VALUE(v, tag, p); \
           if (tag != 0) continue; \
         }
 #else
-# define LOAD_WORD_OR_CONTINUE(v, p) (void)(v = *(ptr_t *)(p))
+# define LOAD_PTR_OR_CONTINUE(v, p) (void)(v = *(ptr_t *)(p))
 #endif /* !E2K */
 
 #if defined(AMIGA) || defined(MACOS) || defined(GC_DARWIN_THREADS)
@@ -2236,27 +2224,27 @@ void GC_register_data_segments(void);
 
 /* Black listing: */
 #ifdef PRINT_BLACK_LIST
-  GC_INNER void GC_add_to_black_list_normal(word p, ptr_t source);
+  GC_INNER void GC_add_to_black_list_normal(ptr_t p, ptr_t source);
                         /* Register bits as a possible future false     */
                         /* reference from the heap or static data       */
-# define GC_ADD_TO_BLACK_LIST_NORMAL(bits, source) \
+# define GC_ADD_TO_BLACK_LIST_NORMAL(p, source) \
                 if (GC_all_interior_pointers) { \
-                  GC_add_to_black_list_stack((word)(bits), (source)); \
+                  GC_add_to_black_list_stack(p, source); \
                 } else \
-                  GC_add_to_black_list_normal((word)(bits), (source))
-  GC_INNER void GC_add_to_black_list_stack(word p, ptr_t source);
-# define GC_ADD_TO_BLACK_LIST_STACK(bits, source) \
-            GC_add_to_black_list_stack((word)(bits), (source))
+                  GC_add_to_black_list_normal(p, source)
+  GC_INNER void GC_add_to_black_list_stack(ptr_t p, ptr_t source);
+# define GC_ADD_TO_BLACK_LIST_STACK(p, source) \
+                GC_add_to_black_list_stack(p, source)
 #else
-  GC_INNER void GC_add_to_black_list_normal(word p);
-# define GC_ADD_TO_BLACK_LIST_NORMAL(bits, source) \
+  GC_INNER void GC_add_to_black_list_normal(ptr_t p);
+# define GC_ADD_TO_BLACK_LIST_NORMAL(p, source) \
                 if (GC_all_interior_pointers) { \
-                  GC_add_to_black_list_stack((word)(bits)); \
+                  GC_add_to_black_list_stack(p); \
                 } else \
-                  GC_add_to_black_list_normal((word)(bits))
-  GC_INNER void GC_add_to_black_list_stack(word p);
-# define GC_ADD_TO_BLACK_LIST_STACK(bits, source) \
-            GC_add_to_black_list_stack((word)(bits))
+                  GC_add_to_black_list_normal(p)
+  GC_INNER void GC_add_to_black_list_stack(ptr_t p);
+# define GC_ADD_TO_BLACK_LIST_STACK(p, source) \
+                GC_add_to_black_list_stack(p)
 #endif /* PRINT_BLACK_LIST */
 
 GC_INNER void GC_promote_black_lists(void);
@@ -2276,7 +2264,7 @@ GC_INNER ptr_t GC_scratch_alloc(size_t bytes);
 #else
 # define GC_scratch_recycle_no_gww GC_scratch_recycle_inner
 #endif
-GC_INNER void GC_scratch_recycle_inner(void *ptr, size_t bytes);
+GC_INNER void GC_scratch_recycle_inner(void *ptr, size_t sz);
                                 /* Reuse the memory region by the heap. */
 
 #ifndef MARK_BIT_PER_OBJ
@@ -2296,14 +2284,14 @@ GC_INNER void GC_register_displacement_inner(size_t offset);
 /* uncollectible.  Will fail to do anything if out of memory.           */
 GC_INNER void GC_new_hblk(size_t lg, int k);
 
-/* Build a free list for objects of size lw (in words) inside heap      */
+/* Build a free list for objects of size lg (in granules) inside heap   */
 /* block h.  Clear objects inside h if clear is set.  Add list to the   */
 /* end of the free list we build.  Return the new free list.  Normally  */
 /* called by GC_new_hblk, but this could also be called without the     */
 /* allocator lock, if we ensure that there is no concurrent collection  */
 /* which might reclaim objects that we have not yet allocated.          */
-GC_INNER ptr_t GC_build_fl(struct hblk *h, size_t lw, GC_bool clear,
-                           ptr_t list);
+GC_INNER ptr_t GC_build_fl(struct hblk *h, ptr_t list, size_t lg,
+                           GC_bool clear);
 
 GC_INNER struct hblk * GC_allochblk(size_t lb_adjusted, int k, unsigned flags,
                                     size_t align_m1);
@@ -2377,8 +2365,8 @@ GC_INNER GC_bool GC_try_to_collect_inner(GC_stop_func stop_func);
 
 GC_EXTERN GC_bool GC_is_initialized; /* GC_init() has been run. */
 
-GC_INNER void GC_collect_a_little_inner(int n);
-                                /* Do n units worth of garbage          */
+GC_INNER void GC_collect_a_little_inner(size_t n_blocks);
+                                /* Do n_blocks units of a garbage       */
                                 /* collection work, if appropriate.     */
                                 /* A unit is an amount appropriate for  */
                                 /* HBLKSIZE bytes of allocation.        */
@@ -2528,7 +2516,7 @@ GC_EXTERN void (*GC_print_heap_obj)(ptr_t p);
     GC_INLINE int GC_rand_next(GC_RAND_STATE_T *pseed)
     {
       AO_t next = (AO_t)((AO_load(pseed) * (unsigned32)1103515245UL + 12345)
-                         & (unsigned32)((unsigned)GC_RAND_MAX));
+                           & (unsigned32)((unsigned)GC_RAND_MAX));
       AO_store(pseed, next);
       return (int)next;
     }
@@ -2642,7 +2630,7 @@ GC_EXTERN GC_bool GC_print_back_height;
   GC_INNER GC_bool GC_page_was_dirty(struct hblk *h);
                         /* Read retrieved dirty bits.   */
 
-  GC_INNER void GC_remove_protection(struct hblk *h, word nblocks,
+  GC_INNER void GC_remove_protection(struct hblk *h, size_t nblocks,
                                      GC_bool is_ptrfree);
                 /* Block h is about to be written or allocated shortly. */
                 /* Ensure that all pages containing any part of the     */
@@ -2894,7 +2882,7 @@ GC_INNER void GC_start_debugging_inner(void);   /* defined in dbg_mlc.c. */
 
 /* Store debugging info into p.  Return displaced pointer.      */
 /* Assume we hold the allocator lock.                           */
-GC_INNER void *GC_store_debug_info_inner(void *p, word sz, const char *str,
+GC_INNER void *GC_store_debug_info_inner(void *p, size_t sz, const char *str,
                                          int linenum);
 
 #if defined(REDIRECT_MALLOC) && !defined(REDIRECT_MALLOC_IN_HEADER) \

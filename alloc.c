@@ -40,7 +40,7 @@
  * Note that this is very fast if the free list is non-empty; it should
  * only involve the execution of 4 or 5 simple instructions.
  * All composite objects on freelists are cleared, except for
- * their first word.
+ * their first "pointer-sized" word.
  */
 
 /*
@@ -392,10 +392,10 @@ STATIC word GC_adj_bytes_allocd(void)
 /* stack clear of long-lived, client-generated garbage.                 */
 STATIC void GC_clear_a_few_frames(void)
 {
-#   ifndef CLEAR_NWORDS
-#     define CLEAR_NWORDS 64
+#   ifndef CLEAR_STACK_NPTRS
+#     define CLEAR_STACK_NPTRS 64 /* pointers */
 #   endif
-    volatile word frames[CLEAR_NWORDS];
+    volatile ptr_t frames[CLEAR_STACK_NPTRS];
 
     BZERO(CAST_AWAY_VOLATILE_PVOID(frames), sizeof(frames));
 }
@@ -644,29 +644,30 @@ GC_INNER GC_bool GC_try_to_collect_inner(GC_stop_func stop_func)
 }
 
 /* The number of extra calls to GC_mark_some that we have made. */
-STATIC int GC_deficit = 0;
+STATIC size_t GC_deficit = 0;
 
 /* The default value of GC_rate.        */
 #ifndef GC_RATE
 # define GC_RATE 10
 #endif
 
-/* When GC_collect_a_little_inner() performs n units of GC work, a unit */
-/* is intended to touch roughly GC_rate pages.  (But, every once in     */
-/* a while, we do more than that.)  This needs to be a fairly large     */
-/* number with our current incremental GC strategy, since otherwise we  */
-/* allocate too much during GC, and the cleanup gets expensive.         */
-STATIC int GC_rate = GC_RATE;
+/* When GC_collect_a_little_inner() performs n_blocks units of garbage  */
+/* collection work, a unit is intended to touch roughly GC_rate pages.  */
+/* (But, every once in a while, we do more than that.)  This needs to   */
+/* be a fairly large number with our current incremental GC strategy,   */
+/* since otherwise we allocate too much during GC, and the cleanup gets */
+/* expensive.                                                           */
+STATIC unsigned GC_rate = GC_RATE;
 
 GC_API void GC_CALL GC_set_rate(int value)
 {
     GC_ASSERT(value > 0);
-    GC_rate = value;
+    GC_rate = (unsigned)value;
 }
 
 GC_API int GC_CALL GC_get_rate(void)
 {
-    return GC_rate;
+    return (int)GC_rate;
 }
 
 /* The default maximum number of prior attempts at world stop marking.  */
@@ -690,7 +691,7 @@ GC_API int GC_CALL GC_get_max_prior_attempts(void)
     return max_prior_attempts;
 }
 
-GC_INNER void GC_collect_a_little_inner(int n)
+GC_INNER void GC_collect_a_little_inner(size_t n_blocks)
 {
     IF_CANCEL(int cancel_state;)
 
@@ -698,8 +699,8 @@ GC_INNER void GC_collect_a_little_inner(int n)
     GC_ASSERT(GC_is_initialized);
     DISABLE_CANCEL(cancel_state);
     if (GC_incremental && GC_collection_in_progress()) {
-        int i;
-        int max_deficit = GC_rate * n;
+        size_t i;
+        size_t max_deficit = GC_rate * n_blocks;
 
 #       ifdef PARALLEL_MARK
             if (GC_time_limit != GC_TIME_UNLIMITED)
@@ -734,9 +735,8 @@ GC_INNER void GC_collect_a_little_inner(int n)
             }
         }
         if (GC_deficit > 0) {
-            GC_deficit -= max_deficit;
-            if (GC_deficit < 0)
-                GC_deficit = 0;
+            GC_deficit = GC_deficit > max_deficit
+                            ? GC_deficit - max_deficit : 0;
         }
     } else if (!GC_dont_gc) {
         GC_maybe_gc();
@@ -823,8 +823,8 @@ GC_API int GC_CALL GC_collect_a_little(void)
 /* we succeed.                                                          */
 STATIC GC_bool GC_stopped_mark(GC_stop_func stop_func)
 {
-    int abandoned_at;
     ptr_t cold_gc_frame = GC_approx_sp();
+    unsigned abandoned_at;
 #   ifndef NO_CLOCK
       CLOCK_TYPE start_time = CLOCK_TYPE_INITIALIZER;
       GC_bool start_time_valid = FALSE;
@@ -833,10 +833,10 @@ STATIC GC_bool GC_stopped_mark(GC_stop_func stop_func)
     GC_ASSERT(I_HOLD_LOCK());
     GC_ASSERT(GC_is_initialized);
 #   if !defined(REDIRECT_MALLOC) && defined(USE_WINALLOC)
-        GC_add_current_malloc_heap();
+      GC_add_current_malloc_heap();
 #   endif
 #   if defined(REGISTER_LIBRARIES_EARLY)
-        GC_cond_register_dynamic_libraries();
+      GC_cond_register_dynamic_libraries();
 #   endif
 
 #   if !defined(GC_NO_FINALIZATION) && !defined(GC_TOGGLE_REFS_NOT_NEEDED)
@@ -875,37 +875,37 @@ STATIC GC_bool GC_stopped_mark(GC_stop_func stop_func)
 #   endif
 
     /* Notify about marking from all roots.     */
-        if (GC_on_collection_event)
-          GC_on_collection_event(GC_EVENT_MARK_START);
+    if (GC_on_collection_event)
+      GC_on_collection_event(GC_EVENT_MARK_START);
 
     /* Minimize junk left in my registers and on the stack.     */
-            GC_clear_a_few_frames();
-            GC_noop6(0,0,0,0,0,0);
+    GC_clear_a_few_frames();
+    GC_noop6(0,0,0,0,0,0);
 
-        GC_initiate_gc();
+    GC_initiate_gc();
+#   ifdef PARALLEL_MARK
+      if (stop_func != GC_never_stop_func)
+        GC_parallel_mark_disabled = TRUE;
+#   endif
+    for (abandoned_at = 1; !(*stop_func)(); abandoned_at++) {
+      if (GC_mark_some(cold_gc_frame)) {
 #       ifdef PARALLEL_MARK
-          if (stop_func != GC_never_stop_func)
-            GC_parallel_mark_disabled = TRUE;
-#       endif
-        for (abandoned_at = 0; !(*stop_func)(); abandoned_at++) {
-          if (GC_mark_some(cold_gc_frame)) {
-#           ifdef PARALLEL_MARK
-              if (GC_parallel && GC_parallel_mark_disabled) {
-                GC_COND_LOG_PRINTF("Stopped marking done after %d iterations"
-                                   " with disabled parallel marker\n",
-                                   abandoned_at);
-              }
-#           endif
-            abandoned_at = -1;
-            break;
+          if (GC_parallel && GC_parallel_mark_disabled) {
+            GC_COND_LOG_PRINTF("Stopped marking done after %u iterations"
+                               " with disabled parallel marker\n",
+                               abandoned_at - 1);
           }
-        }
-#       ifdef PARALLEL_MARK
-          GC_parallel_mark_disabled = FALSE;
 #       endif
+        abandoned_at = 0;
+        break;
+      }
+    }
+#   ifdef PARALLEL_MARK
+      GC_parallel_mark_disabled = FALSE;
+#   endif
 
-    if (abandoned_at >= 0) {
-      GC_deficit = abandoned_at; /* Give the mutator a chance. */
+    if (abandoned_at > 0) {
+      GC_deficit = abandoned_at - 1; /* give the mutator a chance */
       /* TODO: Notify GC_EVENT_MARK_ABANDON */
     } else {
       GC_gc_no++;
@@ -964,7 +964,7 @@ STATIC GC_bool GC_stopped_mark(GC_stop_func stop_func)
           /* Update old world_stopped_total_time and its divisor.   */
           world_stopped_total_time = total_time;
           world_stopped_total_divisor = ++divisor;
-          if (abandoned_at < 0) {
+          if (0 == abandoned_at) {
             GC_ASSERT(divisor != 0);
             GC_log_printf("World-stopped marking took %lu ms %lu ns"
                           " (%u ms in average)\n", time_diff, ns_frac_diff,
@@ -974,12 +974,10 @@ STATIC GC_bool GC_stopped_mark(GC_stop_func stop_func)
       }
 #   endif
 
-    if (abandoned_at >= 0) {
-      GC_COND_LOG_PRINTF("Abandoned stopped marking after %d iterations\n",
-                         abandoned_at);
-      return FALSE;
-    }
-    return TRUE;
+    if (0 == abandoned_at) return TRUE;
+    GC_COND_LOG_PRINTF("Abandoned stopped marking after %u iterations\n",
+                       abandoned_at - 1);
+    return FALSE;
 }
 
 GC_INNER void GC_set_fl_marks(ptr_t q)
@@ -991,7 +989,7 @@ GC_INNER void GC_set_fl_marks(ptr_t q)
     const struct hblk *last_h = h;
     hdr *hhdr;
 #   ifdef MARK_BIT_PER_OBJ
-        word sz;
+        size_t sz;
 #   endif
 
     GC_ASSERT(q != NULL);
@@ -1003,7 +1001,7 @@ GC_INNER void GC_set_fl_marks(ptr_t q)
         q2 = (ptr_t)obj_link(q);
 #   endif
     for (;;) {
-        word bit_no = MARK_BIT_NO((ptr_t)q - (ptr_t)h, sz);
+        size_t bit_no = MARK_BIT_NO((size_t)((ptr_t)q - (ptr_t)h), sz);
 
         if (!mark_bit_from_hdr(hhdr, bit_no)) {
           set_mark_bit_from_hdr(hhdr, bit_no);
@@ -1047,17 +1045,14 @@ GC_INNER void GC_set_fl_marks(ptr_t q)
     /* not do atomic updates to the free-list).  The race seems to be   */
     /* harmless, and for now we just skip this check in case of TSan.   */
 #   if defined(AO_HAVE_load_acquire_read) && !defined(THREAD_SANITIZER)
-      AO_t *list = (AO_t *)AO_load_acquire_read((AO_t *)pfreelist);
+      ptr_t list = GC_cptr_load_acquire_read((volatile ptr_t *)pfreelist);
                 /* Atomic operations are used because the world is running. */
-      AO_t *prev;
-      AO_t *p;
+      ptr_t p, prev, next;
 
       if (ADDR(list) <= HBLKSIZE) return;
 
-      prev = (AO_t *)pfreelist;
-      for (p = list; p != NULL;) {
-        AO_t *next;
-
+      prev = (ptr_t)pfreelist;
+      for (p = list; p != NULL; p = next) {
         if (!GC_is_marked(p)) {
           ABORT_ARG2("Unmarked local free-list entry",
                      ": object %p on list %p", (void *)p, (void *)list);
@@ -1070,11 +1065,10 @@ GC_INNER void GC_set_fl_marks(ptr_t q)
         /* after the object was returned to the client.  It might       */
         /* perform the mark-check on the just allocated object but      */
         /* that should be harmless.                                     */
-        next = (AO_t *)AO_load_acquire_read(p);
-        if (AO_load(prev) != (AO_t)p)
+        next = GC_cptr_load_acquire_read((volatile ptr_t *)p);
+        if (GC_cptr_load((volatile ptr_t *)prev) != p)
           break;
         prev = p;
-        p = next;
       }
 #   else
       /* FIXME: Not implemented (just skipped). */
@@ -1090,15 +1084,20 @@ STATIC void GC_clear_fl_marks(ptr_t q)
       struct hblk *h = HBLKPTR(q);
       const struct hblk *last_h = h;
       hdr *hhdr = HDR(h);
-      word sz = hhdr -> hb_sz; /* Normally set only once. */
+      size_t sz = hhdr -> hb_sz; /* Normally set only once. */
 
       for (;;) {
-        word bit_no = MARK_BIT_NO((ptr_t)q - (ptr_t)h, sz);
+        size_t bit_no = MARK_BIT_NO((size_t)((ptr_t)q - (ptr_t)h), sz);
 
         if (mark_bit_from_hdr(hhdr, bit_no)) {
           size_t n_marks = hhdr -> hb_n_marks;
 
-          GC_ASSERT(n_marks != 0);
+#         ifdef LINT2
+            if (0 == n_marks)
+              ABORT("hhdr->hb_n_marks cannot be zero");
+#         else
+            GC_ASSERT(n_marks != 0);
+#         endif
           clear_mark_bit_from_hdr(hhdr, bit_no);
           n_marks--;
 #         ifdef PARALLEL_MARK
@@ -1394,22 +1393,22 @@ GC_INNER ptr_t GC_os_get_mem(size_t bytes)
   return (ptr_t)space;
 }
 
-/* Use the chunk of memory starting at h of size bytes as part of the heap. */
-/* Assumes h is HBLKSIZE aligned, bytes argument is a multiple of HBLKSIZE. */
-STATIC void GC_add_to_heap(struct hblk *h, size_t bytes)
+/* Use the chunk of memory starting at h of size sz as part of the      */
+/* heap.  Assumes h is HBLKSIZE aligned, sz is a multiple of HBLKSIZE.  */
+STATIC void GC_add_to_heap(struct hblk *h, size_t sz)
 {
     hdr *hhdr;
     ptr_t endp;
     size_t old_capacity = 0;
     void *old_heap_sects = NULL;
 #   ifdef GC_ASSERTIONS
-      unsigned i;
+      size_t i;
 #   endif
 
     GC_ASSERT(I_HOLD_LOCK());
     GC_ASSERT(ADDR(h) % HBLKSIZE == 0);
-    GC_ASSERT(bytes % HBLKSIZE == 0);
-    GC_ASSERT(bytes > 0);
+    GC_ASSERT(sz % HBLKSIZE == 0);
+    GC_ASSERT(sz > 0);
     GC_ASSERT(GC_all_nils != NULL);
 
     if (EXPECT(GC_n_heap_sects == GC_capacity_heap_sects, FALSE)) {
@@ -1417,14 +1416,14 @@ STATIC void GC_add_to_heap(struct hblk *h, size_t bytes)
 #     ifndef INITIAL_HEAP_SECTS
 #       define INITIAL_HEAP_SECTS 32
 #     endif
-      size_t new_capacity = GC_n_heap_sects > 0 ?
-                (size_t)GC_n_heap_sects * 2 : INITIAL_HEAP_SECTS;
+      size_t new_capacity = GC_n_heap_sects > 0
+                                ? GC_n_heap_sects * 2 : INITIAL_HEAP_SECTS;
       void *new_heap_sects =
                 GC_scratch_alloc(new_capacity * sizeof(struct HeapSect));
 
       if (NULL == new_heap_sects) {
         /* Retry with smaller yet sufficient capacity.  */
-        new_capacity = (size_t)GC_n_heap_sects + INITIAL_HEAP_SECTS;
+        new_capacity = GC_n_heap_sects + INITIAL_HEAP_SECTS;
         new_heap_sects =
                 GC_scratch_alloc(new_capacity * sizeof(struct HeapSect));
         if (NULL == new_heap_sects)
@@ -1445,15 +1444,16 @@ STATIC void GC_add_to_heap(struct hblk *h, size_t bytes)
     while (EXPECT(ADDR(h) <= HBLKSIZE, FALSE)) {
         /* Can't handle memory near address zero. */
         ++h;
-        bytes -= HBLKSIZE;
-        if (0 == bytes) return;
+        sz -= HBLKSIZE;
+        if (0 == sz) return;
     }
-    endp = (ptr_t)h + bytes;
-    while (EXPECT(ADDR_GE((ptr_t)h, endp), FALSE)) {
-        bytes -= HBLKSIZE;
-        if (0 == bytes) return;
-        endp -= HBLKSIZE;
+    while (EXPECT(ADDR(h) >= GC_WORD_MAX - sz, FALSE)) {
+        /* Prevent overflow when calculating endp.  */
+        sz -= HBLKSIZE;
+        if (0 == sz) return;
     }
+    endp = (ptr_t)h + sz;
+
     hhdr = GC_install_header(h);
     if (EXPECT(NULL == hhdr, FALSE)) {
         /* This is extremely unlikely. Can't add it.  This will         */
@@ -1474,16 +1474,16 @@ STATIC void GC_add_to_heap(struct hblk *h, size_t bytes)
       }
 #   endif
     GC_heap_sects[GC_n_heap_sects].hs_start = (ptr_t)h;
-    GC_heap_sects[GC_n_heap_sects].hs_bytes = bytes;
+    GC_heap_sects[GC_n_heap_sects].hs_bytes = sz;
     GC_n_heap_sects++;
-    hhdr -> hb_sz = bytes;
+    hhdr -> hb_sz = sz;
     hhdr -> hb_flags = 0;
     GC_freehblk(h);
-    GC_heapsize += bytes;
+    GC_heapsize += sz;
 
     if (ADDR_GE((ptr_t)GC_least_plausible_heap_addr, (ptr_t)h)
         || EXPECT(NULL == GC_least_plausible_heap_addr, FALSE)) {
-        GC_least_plausible_heap_addr = (ptr_t)h - sizeof(word);
+        GC_least_plausible_heap_addr = (ptr_t)h - sizeof(ptr_t);
                 /* Making it a little smaller than necessary prevents   */
                 /* us from getting a false hit from the variable        */
                 /* itself.  There's some unintentional reflection       */
@@ -1495,7 +1495,7 @@ STATIC void GC_add_to_heap(struct hblk *h, size_t bytes)
 #   ifdef SET_REAL_HEAP_BOUNDS
       if (ADDR(h) < GC_least_real_heap_addr
           || EXPECT(0 == GC_least_real_heap_addr, FALSE))
-        GC_least_real_heap_addr = ADDR(h) - sizeof(word);
+        GC_least_real_heap_addr = ADDR(h) - sizeof(ptr_t);
       if (GC_greatest_real_heap_addr < ADDR(endp)) {
 #       ifdef INCLUDE_LINUX_THREAD_DESCR
           /* Avoid heap intersection with the static data roots. */
@@ -1521,7 +1521,7 @@ STATIC void GC_add_to_heap(struct hblk *h, size_t bytes)
 #if !defined(NO_DEBUGGING)
   void GC_print_heap_sects(void)
   {
-    unsigned i;
+    size_t i;
 
     GC_printf("Total heap size: %lu" IF_USE_MUNMAP(" (%lu unmapped)") "\n",
               (unsigned long)GC_heapsize /*, */
@@ -1536,8 +1536,8 @@ STATIC void GC_add_to_heap(struct hblk *h, size_t bytes)
       for (h = (struct hblk *)start; ADDR_LT((ptr_t)h, start + len); h++) {
         if (GC_is_black_listed(h, HBLKSIZE)) nbl++;
       }
-      GC_printf("Section %d from %p to %p %u/%lu blacklisted\n",
-                i, (void *)start, (void *)&start[len],
+      GC_printf("Section %u from %p to %p %u/%lu blacklisted\n",
+                (unsigned)i, (void *)start, (void *)&start[len],
                 nbl, (unsigned long)divHBLKSZ(len));
     }
   }
@@ -1555,7 +1555,7 @@ GC_API void GC_CALL GC_set_max_heap_size(GC_word n)
 
 word GC_max_retries = 0;
 
-GC_INNER void GC_scratch_recycle_inner(void *ptr, size_t bytes)
+GC_INNER void GC_scratch_recycle_inner(void *ptr, size_t sz)
 {
   size_t page_offset;
   size_t displ = 0;
@@ -1564,15 +1564,15 @@ GC_INNER void GC_scratch_recycle_inner(void *ptr, size_t bytes)
   GC_ASSERT(I_HOLD_LOCK());
   if (NULL == ptr) return;
 
-  GC_ASSERT(bytes != 0);
+  GC_ASSERT(sz != 0);
   GC_ASSERT(GC_page_size != 0);
   /* TODO: Assert correct memory flags if GWW_VDB */
   page_offset = ADDR(ptr) & (GC_page_size-1);
   if (page_offset != 0)
     displ = GC_page_size - page_offset;
-  recycled_bytes = bytes > displ ? (bytes - displ) & ~(GC_page_size - 1) : 0;
+  recycled_bytes = sz > displ ? (sz - displ) & ~(GC_page_size - 1) : 0;
   GC_COND_LOG_PRINTF("Recycle %lu/%lu scratch-allocated bytes at %p\n",
-                (unsigned long)recycled_bytes, (unsigned long)bytes, ptr);
+                (unsigned long)recycled_bytes, (unsigned long)sz, ptr);
   if (recycled_bytes > 0)
     GC_add_to_heap((struct hblk *)((ptr_t)ptr + displ), recycled_bytes);
 }
@@ -1583,7 +1583,7 @@ GC_INNER void GC_scratch_recycle_inner(void *ptr, size_t bytes)
 /* Returns FALSE on failure.                                            */
 GC_INNER GC_bool GC_expand_hp_inner(word n)
 {
-    size_t bytes;
+    size_t sz;
     struct hblk * space;
     word expansion_slop;        /* Number of bytes by which we expect   */
                                 /* the heap to expand soon.             */
@@ -1591,22 +1591,22 @@ GC_INNER GC_bool GC_expand_hp_inner(word n)
     GC_ASSERT(I_HOLD_LOCK());
     GC_ASSERT(GC_page_size != 0);
     if (0 == n) n = 1;
-    bytes = ROUNDUP_PAGESIZE((size_t)n * HBLKSIZE);
+    sz = ROUNDUP_PAGESIZE((size_t)n * HBLKSIZE);
     GC_DBGLOG_PRINT_HEAP_IN_USE();
     if (GC_max_heapsize != 0
-        && (GC_max_heapsize < (word)bytes
-            || GC_heapsize > GC_max_heapsize - (word)bytes)) {
+        && (GC_max_heapsize < (word)sz
+            || GC_heapsize > GC_max_heapsize - (word)sz)) {
         /* Exceeded self-imposed limit */
         return FALSE;
     }
-    space = (struct hblk *)GC_os_get_mem(bytes);
+    space = (struct hblk *)GC_os_get_mem(sz);
     if (EXPECT(NULL == space, FALSE)) {
-        WARN("Failed to expand heap by %" WARN_PRIuPTR " KiB\n", bytes >> 10);
+        WARN("Failed to expand heap by %" WARN_PRIuPTR " KiB\n", sz >> 10);
         return FALSE;
     }
     GC_last_heap_growth_gc_no = GC_gc_no;
     GC_INFOLOG_PRINTF("Grow heap to %lu KiB after %lu bytes allocated\n",
-                      TO_KiB_UL(GC_heapsize + bytes),
+                      TO_KiB_UL(GC_heapsize + sz),
                       (unsigned long)GC_bytes_allocd);
 
     /* Adjust heap limits generously for blacklisting to work better.   */
@@ -1615,23 +1615,25 @@ GC_INNER GC_bool GC_expand_hp_inner(word n)
     expansion_slop = min_bytes_allocd() + 4 * MAXHINCR * HBLKSIZE;
     if ((0 == GC_last_heap_addr && (ADDR(space) & SIGNB) == 0)
         || (GC_last_heap_addr != 0 && GC_last_heap_addr < ADDR(space))) {
-        /* Assume the heap is growing up. */
-        ptr_t new_limit = (ptr_t)space + bytes + expansion_slop;
+      /* Assume the heap is growing up. */
+      if (EXPECT(ADDR(space) < GC_WORD_MAX - (sz + expansion_slop), TRUE)) {
+        ptr_t new_limit = (ptr_t)space + sz + expansion_slop;
 
-        if (ADDR_LT((ptr_t)space, new_limit)
-            && ADDR_LT((ptr_t)GC_greatest_plausible_heap_addr, new_limit))
+        if (ADDR_LT((ptr_t)GC_greatest_plausible_heap_addr, new_limit))
           GC_greatest_plausible_heap_addr = new_limit;
+      }
     } else {
-        /* Heap is growing down. */
-        ptr_t new_limit = (ptr_t)space - expansion_slop - sizeof(word);
+      /* Heap is growing down.  */
+      if (EXPECT(ADDR(space) > expansion_slop + sizeof(ptr_t), TRUE)) {
+        ptr_t new_limit = (ptr_t)space - expansion_slop - sizeof(ptr_t);
 
-        if (ADDR_LT(new_limit, (ptr_t)space)
-            && ADDR_LT(new_limit, (ptr_t)GC_least_plausible_heap_addr))
+        if (ADDR_LT(new_limit, (ptr_t)GC_least_plausible_heap_addr))
           GC_least_plausible_heap_addr = new_limit;
+      }
     }
     GC_last_heap_addr = ADDR(space);
 
-    GC_add_to_heap(space, bytes);
+    GC_add_to_heap(space, sz);
     if (GC_on_heap_resize)
         (*GC_on_heap_resize)(GC_heapsize);
 
@@ -1641,7 +1643,7 @@ GC_INNER GC_bool GC_expand_hp_inner(word n)
 /* Really returns a bool, but it's externally visible, so that's clumsy. */
 GC_API int GC_CALL GC_expand_hp(size_t bytes)
 {
-    word n_blocks = OBJ_SZ_TO_BLOCKS_CHECKED(bytes);
+    size_t n_blocks = OBJ_SZ_TO_BLOCKS_CHECKED(bytes);
     word old_heapsize;
     GC_bool result;
 

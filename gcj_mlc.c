@@ -24,7 +24,7 @@
  * Each allocated object has a pointer in its beginning to a vtable,
  * which for our purposes is simply a structure describing the type of
  * the object.  This descriptor structure contains a GC marking
- * descriptor at offset MARK_DESCR_OFFSET.
+ * descriptor at offset GC_GCJ_MARK_DESCR_OFFSET.
  *
  * It is hoped that this interface may also be useful for other systems,
  * possibly with some tuning of the constants.  But the immediate goal
@@ -105,7 +105,7 @@ GC_API void GC_CALL GC_init_gcj_malloc_mp(unsigned mp_index, GC_mark_proc mp)
     } else {
         GC_gcj_kind = (int)GC_new_kind_inner(
                         (void **)GC_gcjobjfreelist,
-                        (((word)(-(signed_word)MARK_DESCR_OFFSET
+                        (((word)(-(signed_word)GC_GCJ_MARK_DESCR_OFFSET
                                  - GC_INDIR_PER_OBJ_BIAS))
                          | GC_DS_PER_OBJECT),
                         FALSE, TRUE);
@@ -211,7 +211,7 @@ GC_API GC_ATTR_MALLOC void * GC_CALL GC_debug_gcj_malloc(size_t lb,
     if (!GC_debugging_started) {
         GC_start_debugging_inner();
     }
-    result = GC_store_debug_info_inner(base, (word)lb, s, i);
+    result = GC_store_debug_info_inner(base, lb, s, i);
     ADD_CALL_CHAIN(base, ra);
     UNLOCK();
     GC_dirty(result);

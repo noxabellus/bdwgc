@@ -29,22 +29,21 @@
  * Adjacent free blocks are coalesced.
  */
 
-
-# define MAX_BLACK_LIST_ALLOC (2*HBLKSIZE)
+#define MAX_BLACK_LIST_ALLOC (2*HBLKSIZE)
                 /* largest block we will allocate starting on a black   */
                 /* listed block.  Must be >= HBLKSIZE.                  */
 
 
-# define UNIQUE_THRESHOLD 32
+#define UNIQUE_THRESHOLD 32
         /* Sizes up to this many HBLKs each have their own free list    */
-# define HUGE_THRESHOLD 256
+#define HUGE_THRESHOLD 256
         /* Sizes of at least this many heap blocks are mapped to a      */
         /* single free list.                                            */
-# define FL_COMPRESSION 8
+#define FL_COMPRESSION 8
         /* In between sizes map this many distinct sizes to a single    */
         /* bin.                                                         */
 
-# define N_HBLK_FLS ((HUGE_THRESHOLD - UNIQUE_THRESHOLD) / FL_COMPRESSION \
+#define N_HBLK_FLS ((HUGE_THRESHOLD - UNIQUE_THRESHOLD) / FL_COMPRESSION \
                      + UNIQUE_THRESHOLD)
 
 #ifndef GC_GCJ_SUPPORT
@@ -80,36 +79,37 @@ GC_API void GC_CALL GC_iterate_free_hblks(GC_walk_free_blk_fn fn,
 /* Return the largest n such that the number of free bytes on lists     */
 /* n .. N_HBLK_FLS is greater or equal to GC_max_large_allocd_bytes     */
 /* minus GC_large_allocd_bytes.  If there is no such n, return 0.       */
-GC_INLINE int GC_enough_large_bytes_left(void)
+GC_INLINE size_t GC_enough_large_bytes_left(void)
 {
-    int n;
+    size_t n;
     word bytes = GC_large_allocd_bytes;
 
     GC_ASSERT(GC_max_large_allocd_bytes <= GC_heapsize);
-    for (n = N_HBLK_FLS; n >= 0; --n) {
+    for (n = N_HBLK_FLS + 1; n > 0;) {
+        n--;
         bytes += GC_free_bytes[n];
-        if (bytes >= GC_max_large_allocd_bytes) return n;
+        if (bytes >= GC_max_large_allocd_bytes) break;
     }
-    return 0;
+    return n;
 }
 
 /* Map a number of blocks to the appropriate large block free-list index. */
-STATIC int GC_hblk_fl_from_blocks(size_t blocks_needed)
+STATIC size_t GC_hblk_fl_from_blocks(size_t blocks_needed)
 {
-    if (blocks_needed <= UNIQUE_THRESHOLD) return (int)blocks_needed;
+    if (blocks_needed <= UNIQUE_THRESHOLD) return blocks_needed;
     if (blocks_needed >= HUGE_THRESHOLD) return N_HBLK_FLS;
-    return (int)(blocks_needed - UNIQUE_THRESHOLD)/FL_COMPRESSION
-                                        + UNIQUE_THRESHOLD;
+    return (blocks_needed - UNIQUE_THRESHOLD) / FL_COMPRESSION
+           + UNIQUE_THRESHOLD;
 }
 
-# define PHDR(hhdr) HDR((hhdr) -> hb_prev)
-# define NHDR(hhdr) HDR((hhdr) -> hb_next)
+#define PHDR(hhdr) HDR((hhdr) -> hb_prev)
+#define NHDR(hhdr) HDR((hhdr) -> hb_next)
 
-# ifdef USE_MUNMAP
+#ifdef USE_MUNMAP
 #   define IS_MAPPED(hhdr) (((hhdr) -> hb_flags & WAS_UNMAPPED) == 0)
-# else
+#else
 #   define IS_MAPPED(hhdr) TRUE
-# endif /* !USE_MUNMAP */
+#endif /* !USE_MUNMAP */
 
 #if !defined(NO_DEBUGGING) || defined(GC_ASSERTIONS)
   static void GC_CALLBACK add_hb_sz(struct hblk *h, int i,
@@ -132,7 +132,7 @@ STATIC int GC_hblk_fl_from_blocks(size_t blocks_needed)
   }
 #endif /* !NO_DEBUGGING || GC_ASSERTIONS */
 
-# if !defined(NO_DEBUGGING)
+#if !defined(NO_DEBUGGING)
   static void GC_CALLBACK print_hblkfreelist_item(struct hblk *h, int i,
                                                   void *prev_index_ptr)
   {
@@ -168,10 +168,10 @@ STATIC int GC_hblk_fl_from_blocks(size_t blocks_needed)
                     (unsigned long)total);
   }
 
-/* Return the free-list index on which the block described by the header */
-/* appears, or -1 if it appears nowhere.                                 */
-static int free_list_index_of(const hdr *wanted)
-{
+  /* Return the free-list index on which the block described by the header */
+  /* appears, or -1 if it appears nowhere.                                 */
+  static int free_list_index_of(const hdr *wanted)
+  {
     int i;
 
     for (i = 0; i <= N_HBLK_FLS; ++i) {
@@ -184,11 +184,11 @@ static int free_list_index_of(const hdr *wanted)
       }
     }
     return -1;
-}
+  }
 
-GC_API void GC_CALL GC_dump_regions(void)
-{
-    unsigned i;
+  GC_API void GC_CALL GC_dump_regions(void)
+  {
+    size_t i;
 
     for (i = 0; i < GC_n_heap_sects; ++i) {
         ptr_t start = GC_heap_sects[i].hs_start;
@@ -212,8 +212,8 @@ GC_API void GC_CALL GC_dump_regions(void)
                 continue;
             }
             if (HBLK_IS_FREE(hhdr)) {
-                int correct_index = GC_hblk_fl_from_blocks(
-                                        (size_t)divHBLKSZ(hhdr -> hb_sz));
+                int correct_index = (int)GC_hblk_fl_from_blocks(
+                                                divHBLKSZ(hhdr -> hb_sz));
                 int actual_index;
 
                 GC_printf("\t%p\tfree block of size 0x%lx bytes%s\n",
@@ -235,9 +235,8 @@ GC_API void GC_CALL GC_dump_regions(void)
             }
         }
     }
-}
-
-# endif /* NO_DEBUGGING */
+  }
+#endif /* NO_DEBUGGING */
 
 /* Initialize hdr for a block containing the indicated size and         */
 /* kind of objects.  Return FALSE on failure.                           */
@@ -325,7 +324,7 @@ static GC_bool setup_header(hdr *hhdr, struct hblk *block, size_t lb_adjusted,
 }
 
 /* Remove hhdr from the free list (it is assumed to specified by index). */
-STATIC void GC_remove_from_fl_at(hdr *hhdr, int index)
+STATIC void GC_remove_from_fl_at(hdr *hhdr, size_t index)
 {
     GC_ASSERT(modHBLKSZ(hhdr -> hb_sz) == 0);
     if (hhdr -> hb_prev == 0) {
@@ -352,8 +351,7 @@ STATIC void GC_remove_from_fl_at(hdr *hhdr, int index)
 /* size-appropriate free list).                                         */
 GC_INLINE void GC_remove_from_fl(hdr *hhdr)
 {
-  GC_remove_from_fl_at(hhdr, GC_hblk_fl_from_blocks(
-                                        (size_t)divHBLKSZ(hhdr -> hb_sz)));
+  GC_remove_from_fl_at(hhdr, GC_hblk_fl_from_blocks(divHBLKSZ(hhdr -> hb_sz)));
 }
 
 /* Return a pointer to the block ending just before h, if any.  */
@@ -395,12 +393,12 @@ STATIC struct hblk * GC_free_block_ending_at(struct hblk *h)
 /* We maintain individual free lists sorted by address. */
 STATIC void GC_add_to_fl(struct hblk *h, hdr *hhdr)
 {
-    int index = GC_hblk_fl_from_blocks((size_t)divHBLKSZ(hhdr -> hb_sz));
+    size_t index = GC_hblk_fl_from_blocks(divHBLKSZ(hhdr -> hb_sz));
     struct hblk *second = GC_hblkfreelist[index];
 
 #   if defined(GC_ASSERTIONS) && !defined(USE_MUNMAP)
     {
-      struct hblk *next = (struct hblk *)((word)h + hhdr -> hb_sz);
+      struct hblk *next = (struct hblk *)((ptr_t)h + hhdr -> hb_sz);
       const hdr *nexthdr = HDR(next);
       struct hblk *prev = GC_free_block_ending_at(h);
       const hdr *prevhdr = HDR(prev);
@@ -489,7 +487,7 @@ GC_INLINE void GC_adjust_num_unmapped(struct hblk *h, hdr *hhdr)
 /* way blocks are ever unmapped.                                        */
 GC_INNER void GC_unmap_old(unsigned threshold)
 {
-    int i;
+    size_t i;
 
 # ifdef COUNT_UNMAPPED_REGIONS
     /* Skip unmapping if we have already exceeded the soft limit.       */
@@ -508,7 +506,7 @@ GC_INNER void GC_unmap_old(unsigned threshold)
 
         /* Check that the interval is not smaller than the threshold.   */
         /* The truncated counter value wrapping is handled correctly.   */
-        if ((unsigned short)(GC_gc_no - hhdr->hb_last_reclaimed)
+        if ((unsigned short)(GC_gc_no - hhdr -> hb_last_reclaimed)
             >= (unsigned short)threshold) {
 #         ifdef COUNT_UNMAPPED_REGIONS
             /* Continue with unmapping the block only if it will not    */
@@ -523,7 +521,7 @@ GC_INNER void GC_unmap_old(unsigned threshold)
             }
             GC_num_unmapped_regions = regions;
 #         endif
-          GC_unmap((ptr_t)h, (size_t)(hhdr -> hb_sz));
+          GC_unmap((ptr_t)h, hhdr -> hb_sz);
           hhdr -> hb_flags |= WAS_UNMAPPED;
         }
       }
@@ -535,7 +533,7 @@ GC_INNER void GC_unmap_old(unsigned threshold)
 /* fully mapped or fully unmapped.                                      */
 GC_INNER void GC_merge_unmapped(void)
 {
-    int i;
+    size_t i;
 
     for (i = 0; i <= N_HBLK_FLS; ++i) {
       struct hblk *h = GC_hblkfreelist[i];
@@ -543,15 +541,15 @@ GC_INNER void GC_merge_unmapped(void)
       while (h != 0) {
         struct hblk *next;
         hdr *hhdr, *nexthdr;
-        word size, nextsize;
+        size_t size, next_size;
 
         GET_HDR(h, hhdr);
         size = hhdr -> hb_sz;
-        next = (struct hblk *)((word)h + size);
+        next = (struct hblk *)((ptr_t)h + size);
         GET_HDR(next, nexthdr);
         /* Coalesce with successor, if possible. */
         if (nexthdr != NULL && HBLK_IS_FREE(nexthdr)
-              && !((size + (nextsize = nexthdr -> hb_sz)) & SIGNB)
+              && ((size + (next_size = nexthdr -> hb_sz)) & SIZET_SIGNB) == 0
                  /* no overflow */) {
             /* Note that we usually try to avoid adjacent free blocks   */
             /* that are either both mapped or both unmapped.  But that  */
@@ -560,20 +558,20 @@ GC_INNER void GC_merge_unmapped(void)
             /* not hold if the merged block would be too big.           */
             if (IS_MAPPED(hhdr) && !IS_MAPPED(nexthdr)) {
               /* Make both consistent, so that we can merge.    */
-                if (size > nextsize) {
+                if (size > next_size) {
                   GC_adjust_num_unmapped(next, nexthdr);
-                  GC_remap((ptr_t)next, nextsize);
+                  GC_remap((ptr_t)next, next_size);
                 } else {
                   GC_adjust_num_unmapped(h, hhdr);
                   GC_unmap((ptr_t)h, size);
-                  GC_unmap_gap((ptr_t)h, size, (ptr_t)next, nextsize);
+                  GC_unmap_gap((ptr_t)h, size, (ptr_t)next, next_size);
                   hhdr -> hb_flags |= WAS_UNMAPPED;
                 }
             } else if (IS_MAPPED(nexthdr) && !IS_MAPPED(hhdr)) {
-              if (size > nextsize) {
+              if (size > next_size) {
                 GC_adjust_num_unmapped(next, nexthdr);
-                GC_unmap((ptr_t)next, nextsize);
-                GC_unmap_gap((ptr_t)h, size, (ptr_t)next, nextsize);
+                GC_unmap((ptr_t)next, next_size);
+                GC_unmap_gap((ptr_t)h, size, (ptr_t)next, next_size);
               } else {
                 GC_adjust_num_unmapped(h, hhdr);
                 GC_remap((ptr_t)h, size);
@@ -582,7 +580,7 @@ GC_INNER void GC_merge_unmapped(void)
               }
             } else if (!IS_MAPPED(hhdr) && !IS_MAPPED(nexthdr)) {
               /* Unmap any gap in the middle */
-                GC_unmap_gap((ptr_t)h, size, (ptr_t)next, nextsize);
+                GC_unmap_gap((ptr_t)h, size, (ptr_t)next, next_size);
             }
             /* If they are both unmapped, we merge, but leave unmapped. */
             GC_remove_from_fl_at(hhdr, i);
@@ -611,27 +609,28 @@ GC_INNER void GC_merge_unmapped(void)
  * If the return value is not 0, then hhdr is the header for it.
  */
 STATIC struct hblk * GC_get_first_part(struct hblk *h, hdr *hhdr,
-                                       size_t bytes, int index)
+                                       size_t size_needed, size_t index)
 {
     size_t total_size;
     struct hblk * rest;
     hdr * rest_hdr;
 
     GC_ASSERT(I_HOLD_LOCK());
-    GC_ASSERT(modHBLKSZ(bytes) == 0);
-    total_size = (size_t)(hhdr -> hb_sz);
+    GC_ASSERT(modHBLKSZ(size_needed) == 0);
+    total_size = hhdr -> hb_sz;
     GC_ASSERT(modHBLKSZ(total_size) == 0);
     GC_remove_from_fl_at(hhdr, index);
-    if (total_size == bytes) return h;
+    if (total_size == size_needed) return h;
 
-    rest = (struct hblk *)((word)h + bytes);
+    rest = (struct hblk *)((ptr_t)h + size_needed);
     rest_hdr = GC_install_header(rest);
     if (EXPECT(NULL == rest_hdr, FALSE)) {
         /* FIXME: This is likely to be very bad news ... */
         WARN("Header allocation failed: dropping block\n", 0);
         return NULL;
     }
-    rest_hdr -> hb_sz = total_size - bytes;
+    rest_hdr -> hb_block = rest;
+    rest_hdr -> hb_sz = total_size - size_needed;
     rest_hdr -> hb_flags = 0;
 #   ifdef GC_ASSERTIONS
       /* Mark h not free, to avoid assertion about adjacent free blocks. */
@@ -652,17 +651,16 @@ STATIC struct hblk * GC_get_first_part(struct hblk *h, hdr *hhdr,
 /* a free list is silly.  But this path is hopefully rare enough that   */
 /* it does not matter.  The code is cleaner this way.)                  */
 STATIC void GC_split_block(struct hblk *hbp, hdr *hhdr, struct hblk *last_hbp,
-                           hdr *last_hdr, int index /* of free list */)
+                           hdr *last_hdr, size_t index /* of free list */)
 {
-    word total_size = hhdr -> hb_sz;
-    word h_size = (word)((ptr_t)last_hbp - (ptr_t)hbp);
+    size_t h_size = (size_t)((ptr_t)last_hbp - (ptr_t)hbp);
     struct hblk *prev = hhdr -> hb_prev;
     struct hblk *next = hhdr -> hb_next;
 
     /* Replace hbp with last_hbp on its free list.  */
     last_hdr -> hb_prev = prev;
     last_hdr -> hb_next = next;
-    last_hdr -> hb_sz = total_size - h_size;
+    last_hdr -> hb_sz = hhdr -> hb_sz - h_size;
     last_hdr -> hb_flags = 0;
     if (prev /* != NULL */) { /* CPPCHECK */
       HDR(prev) -> hb_next = last_hbp;
@@ -682,8 +680,8 @@ STATIC void GC_split_block(struct hblk *hbp, hdr *hhdr, struct hblk *last_hbp,
     last_hdr -> hb_flags |= FREE_BLK;
 }
 
-STATIC struct hblk *GC_allochblk_nth(size_t lb_adjusted, int k,
-                                     unsigned flags, int index, int may_split,
+STATIC struct hblk *GC_allochblk_nth(size_t lb_adjusted, int k, unsigned flags,
+                                     size_t index, int may_split,
                                      size_t align_m1);
 
 #ifdef USE_MUNMAP
@@ -694,11 +692,10 @@ GC_INNER struct hblk *GC_allochblk(size_t lb_adjusted, int k,
                                    unsigned flags /* IGNORE_OFF_PAGE or 0 */,
                                    size_t align_m1)
 {
-    size_t blocks;
-    int start_list;
+    size_t blocks, start_list;
     struct hblk *result;
     int may_split;
-    int split_limit; /* highest index of free list whose blocks we split */
+    size_t split_limit; /* highest index of free list whose blocks we split */
 
     GC_ASSERT(I_HOLD_LOCK());
     GC_ASSERT((lb_adjusted & (GC_GRANULE_BYTES-1)) == 0);
@@ -759,11 +756,11 @@ STATIC unsigned GC_drop_blacklisted_count = 0;
 #define ALIGN_PAD_SZ(p, align_m1) \
                (((align_m1) + 1 - (size_t)ADDR(p)) & (align_m1))
 
-static GC_bool next_hblk_fits_better(const hdr *hhdr, word size_avail,
-                                     word size_needed, size_t align_m1)
+static GC_bool next_hblk_fits_better(const hdr *hhdr, size_t size_avail,
+                                     size_t size_needed, size_t align_m1)
 {
   const hdr *nexthdr;
-  word next_size;
+  size_t next_size;
   size_t next_ofs;
   struct hblk *next_hbp = hhdr -> hb_next;
 
@@ -777,8 +774,8 @@ static GC_bool next_hblk_fits_better(const hdr *hhdr, word size_avail,
          && !GC_is_black_listed(next_hbp + divHBLKSZ(next_ofs), size_needed);
 }
 
-static struct hblk *find_nonbl_hblk(struct hblk *last_hbp, word size_remain,
-                                    word eff_size_needed, size_t align_m1)
+static struct hblk *find_nonbl_hblk(struct hblk *last_hbp, size_t size_remain,
+                                    size_t eff_size_needed, size_t align_m1)
 {
   ptr_t search_end = PTR_ALIGN_DOWN((ptr_t)last_hbp + size_remain,
                                     align_m1 + 1);
@@ -796,9 +793,9 @@ static struct hblk *find_nonbl_hblk(struct hblk *last_hbp, word size_remain,
 
 /* Allocate and drop the block in small chunks, to maximize the chance  */
 /* that we will recover some later.  hhdr should correspond to hbp.     */
-static void drop_hblk_in_chunks(int n, struct hblk *hbp, hdr *hhdr)
+static void drop_hblk_in_chunks(size_t n, struct hblk *hbp, hdr *hhdr)
 {
-  size_t total_size = (size_t)(hhdr -> hb_sz);
+  size_t total_size = hhdr -> hb_sz;
   const struct hblk *limit = hbp + divHBLKSZ(total_size);
 
   GC_ASSERT(HDR(hbp) == hhdr);
@@ -846,13 +843,13 @@ static void drop_hblk_in_chunks(int n, struct hblk *hbp, hdr *hhdr)
 /* If may_split is set to AVOID_SPLIT_REMAPPED, then memory remapping   */
 /* followed by splitting should be generally avoided.  Rounded-up       */
 /* lb_adjusted plus align_m1 value should be less than GC_SIZE_MAX / 2. */
-STATIC struct hblk *GC_allochblk_nth(size_t lb_adjusted, int k,
-                                     unsigned flags, int index, int may_split,
+STATIC struct hblk *GC_allochblk_nth(size_t lb_adjusted, int k, unsigned flags,
+                                     size_t index, int may_split,
                                      size_t align_m1)
 {
     struct hblk *hbp, *last_hbp;
     hdr *hhdr; /* header corresponding to hbp */
-    word size_needed = HBLKSIZE * OBJ_SZ_TO_BLOCKS_CHECKED(lb_adjusted);
+    size_t size_needed = (lb_adjusted + HBLKSIZE-1) & ~(HBLKSIZE-1);
                                 /* number of bytes in requested objects */
 
     GC_ASSERT(I_HOLD_LOCK());
@@ -861,7 +858,7 @@ STATIC struct hblk *GC_allochblk_nth(size_t lb_adjusted, int k,
   retry:
     /* Search for a big enough block in free list.      */
     for (hbp = GC_hblkfreelist[index];; hbp = hhdr -> hb_next) {
-      word size_avail; /* bytes available in this block */
+      size_t size_avail; /* bytes available in this block */
       size_t align_ofs;
 
       if (hbp /* != NULL */) {
@@ -956,7 +953,7 @@ STATIC struct hblk *GC_allochblk_nth(size_t lb_adjusted, int k,
 #     ifdef USE_MUNMAP
         if (!IS_MAPPED(hhdr)) {
           GC_adjust_num_unmapped(hbp, hhdr);
-          GC_remap((ptr_t)hbp, (size_t)(hhdr -> hb_sz));
+          GC_remap((ptr_t)hbp, hhdr -> hb_sz);
           hhdr -> hb_flags &= (unsigned char)~WAS_UNMAPPED;
         }
 #     endif
@@ -972,17 +969,17 @@ STATIC struct hblk *GC_allochblk_nth(size_t lb_adjusted, int k,
 #   ifdef USE_MUNMAP
       if (!IS_MAPPED(hhdr)) {
         GC_adjust_num_unmapped(hbp, hhdr);
-        GC_remap((ptr_t)hbp, (size_t)(hhdr -> hb_sz));
+        GC_remap((ptr_t)hbp, hhdr -> hb_sz);
         hhdr -> hb_flags &= (unsigned char)~WAS_UNMAPPED;
         /* Note: This may leave adjacent, mapped free blocks. */
       }
 #   endif
     /* hbp may be on the wrong free list; the parameter index is important. */
-    hbp = GC_get_first_part(hbp, hhdr, (size_t)size_needed, index);
+    hbp = GC_get_first_part(hbp, hhdr, size_needed, index);
     if (EXPECT(NULL == hbp, FALSE)) return NULL;
 
     /* Add it to map of valid blocks.   */
-    if (EXPECT(!GC_install_counts(hbp, (size_t)size_needed), FALSE))
+    if (EXPECT(!GC_install_counts(hbp, size_needed), FALSE))
       return NULL; /* This leaks memory under very rare conditions. */
 
     /* Set up the header.       */
@@ -992,7 +989,7 @@ STATIC struct hblk *GC_allochblk_nth(size_t lb_adjusted, int k,
       /* Result is always true, not checked to avoid a cppcheck warning. */
 #   else
       if (EXPECT(!setup_header(hhdr, hbp, lb_adjusted, k, flags), FALSE)) {
-        GC_remove_counts(hbp, (size_t)size_needed);
+        GC_remove_counts(hbp, size_needed);
         return NULL; /* ditto */
       }
 #   endif
@@ -1040,17 +1037,17 @@ GC_INNER void GC_freehblk(struct hblk *hbp)
 {
     struct hblk *next, *prev;
     hdr *hhdr, *prevhdr, *nexthdr;
-    word size;
+    size_t size;
 
     GET_HDR(hbp, hhdr);
     size = HBLKSIZE * OBJ_SZ_TO_BLOCKS(hhdr -> hb_sz);
-    if ((size & SIGNB) != 0)
+    if ((size & SIZET_SIGNB) != 0)
       ABORT("Deallocating excessively large block.  Too large an allocation?");
       /* Probably possible if we try to allocate more than half the address */
       /* space at once.  If we don't catch it here, strange things happen   */
       /* later.                                                             */
 
-    GC_remove_counts(hbp, (size_t)size);
+    GC_remove_counts(hbp, size);
     hhdr -> hb_sz = size;
 #   ifdef USE_MUNMAP
       hhdr -> hb_last_reclaimed = (unsigned short)GC_gc_no;
@@ -1069,7 +1066,8 @@ GC_INNER void GC_freehblk(struct hblk *hbp)
     prev = GC_free_block_ending_at(hbp);
     /* Coalesce with successor, if possible.    */
     if (nexthdr != NULL && HBLK_IS_FREE(nexthdr) && IS_MAPPED(nexthdr)
-          && !((hhdr -> hb_sz + nexthdr -> hb_sz) & SIGNB) /* no overflow */) {
+          && ((hhdr -> hb_sz + nexthdr -> hb_sz) & SIZET_SIGNB) == 0
+             /* no overflow */) {
         GC_remove_from_fl(nexthdr);
         hhdr -> hb_sz += nexthdr -> hb_sz;
         GC_remove_header(next);
@@ -1079,7 +1077,7 @@ GC_INNER void GC_freehblk(struct hblk *hbp)
     if (prev /* != NULL */) { /* CPPCHECK */
         prevhdr = HDR(prev);
         if (IS_MAPPED(prevhdr)
-            && !((hhdr -> hb_sz + prevhdr -> hb_sz) & SIGNB)) {
+            && ((hhdr -> hb_sz + prevhdr -> hb_sz) & SIZET_SIGNB) == 0) {
           GC_remove_from_fl(prevhdr);
           prevhdr -> hb_sz += hhdr -> hb_sz;
 #         ifdef USE_MUNMAP

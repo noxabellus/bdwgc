@@ -96,7 +96,7 @@ typedef struct GC_StackContext_Rep {
 # endif
 
 # ifdef E2K
-    size_t ps_ofs; /* the current offset of the procedure stack */
+    size_t ps_ofs; /* the current offset in the procedure stack */
 # endif
 
 # ifndef GC_NO_FINALIZATION
@@ -234,7 +234,7 @@ typedef struct GC_Thread_Rep {
 # endif
 
 # ifdef THREAD_LOCAL_ALLOC
-    struct thread_local_freelists tlfs GC_ATTR_WORD_ALIGNED;
+    struct thread_local_freelists tlfs GC_ATTR_PTRT_ALIGNED;
 # endif
 
 # ifdef NACL
@@ -275,7 +275,7 @@ typedef struct GC_Thread_Rep {
 #ifdef GC_WIN32_THREADS
 # define THREAD_TABLE_INDEX(id) /* id is of DWORD type */ \
                 (int)((((id) >> 8) ^ (id)) % THREAD_TABLE_SZ)
-#elif CPP_WORDSZ == 64
+#elif CPP_WORDSZ > 32
 # define THREAD_TABLE_INDEX(id) \
     (int)(((((NUMERIC_THREAD_ID(id) >> 8) ^ NUMERIC_THREAD_ID(id)) >> 16) \
           ^ ((NUMERIC_THREAD_ID(id) >> 8) ^ NUMERIC_THREAD_ID(id))) \
@@ -406,7 +406,7 @@ GC_INNER void GC_wait_for_gc_completion(GC_bool);
 #endif
 
 #if defined(GC_ENABLE_SUSPEND_THREAD) && defined(SIGNAL_BASED_STOP_WORLD)
-  GC_INNER void GC_suspend_self_inner(GC_thread me, word suspend_cnt);
+  GC_INNER void GC_suspend_self_inner(GC_thread me, size_t suspend_cnt);
 
   GC_INNER void GC_suspend_self_blocked(ptr_t thread_me, void *context);
                                 /* Wrapper over GC_suspend_self_inner.  */

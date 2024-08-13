@@ -97,7 +97,7 @@ GC_INNER void GC_init_thread_local(GC_tlfs p)
     if (!EXPECT(keys_initialized, TRUE)) {
 #       ifdef USE_CUSTOM_SPECIFIC
           /* Ensure proper alignment of a "pushed" GC symbol.   */
-          GC_ASSERT(ADDR(&GC_thread_key) % sizeof(word) == 0);
+          GC_ASSERT(ADDR(&GC_thread_key) % sizeof(ptr_t) == 0);
 #       endif
         res = GC_key_create(&GC_thread_key, reset_thread_key);
         if (COVERT_DATAFLOW(res) != 0) {
@@ -273,13 +273,13 @@ GC_INNER void GC_mark_thread_local_fls_for(GC_tlfs p)
       for (k = 0; k < THREAD_FREELISTS_KINDS; ++k) {
         /* Load the pointer atomically as it might be updated   */
         /* concurrently by GC_FAST_MALLOC_GRANS.                */
-        q = (ptr_t)AO_load((volatile AO_t *)&p->_freelists[k][j]);
+        q = GC_cptr_load((volatile ptr_t *)&(p -> _freelists[k][j]));
         if (ADDR(q) > HBLKSIZE)
           GC_set_fl_marks(q);
       }
 #     ifdef GC_GCJ_SUPPORT
         if (EXPECT(j > 0, TRUE)) {
-          q = (ptr_t)AO_load((volatile AO_t *)&p->gcj_freelists[j]);
+          q = GC_cptr_load((volatile ptr_t *)&(p -> gcj_freelists[j]));
           if (ADDR(q) > HBLKSIZE)
             GC_set_fl_marks(q);
         }

@@ -58,7 +58,9 @@ typedef GC_SIGNEDWORD GC_signed_word;
 #undef GC_SIGNEDWORD
 #undef GC_UNSIGNEDWORD
 
-#if defined(_UINTPTR_T) || defined(_UINTPTR_T_DEFINED)
+#if (defined(_UINTPTR_T) || defined(_UINTPTR_T_DEFINED)) \
+    && !defined(__MSYS__)
+        /* Note: MSYS2 might provide __uintptr_t instead of uintptr_t.  */
   typedef uintptr_t GC_uintptr_t;
 #else
   typedef GC_word GC_uintptr_t;
@@ -917,9 +919,10 @@ GC_API size_t GC_CALL GC_get_prof_stats(struct GC_prof_stats_s *,
 /* typically to avoid data race on multiprocessors.                     */
 GC_API size_t GC_CALL GC_get_size_map_at(int i);
 
-/* Count total memory use (in bytes) by all allocated blocks.  Acquires */
-/* the allocator lock in the reader mode.                               */
-GC_API size_t GC_CALL GC_get_memory_use(void);
+/* Return the total memory use (in bytes) by all allocated blocks.      */
+/* The result is equal to GC_get_heap_size() - GC_get_free_bytes().     */
+/* Acquires the allocator lock in the reader mode.                      */
+GC_API GC_word GC_CALL GC_get_memory_use(void);
 
 /* Disable garbage collection.  Even GC_gcollect calls will be          */
 /* ineffective.                                                         */
@@ -1531,7 +1534,10 @@ GC_API int GC_CALL GC_invoke_finalizers(void);
 #if defined(__GNUC__) && !defined(__INTEL_COMPILER) \
     && !(defined(__APPLE__) && defined(__arm__) && defined(__TINYC__))
         /* TCC (as of v0.9.28rc) does not support asm on macOS/arm. */
-# if defined(__e2k__)
+# if defined(__TINYC__)
+#   define GC_reachable_here(ptr) \
+                __asm__ __volatile__ (" " : : "g"(ptr) : "memory")
+# elif defined(__e2k__)
 #   define GC_reachable_here(ptr) \
                 __asm__ __volatile__ (" " : : "r"(ptr) : "memory")
 # else

@@ -268,7 +268,7 @@ STATIC void GC_init_size_map(void)
   GC_API void * GC_CALL GC_clear_stack(void *arg)
   {
 #   ifndef STACK_NOT_SCANNED
-      word volatile dummy[SMALL_CLEAR_SIZE];
+      volatile ptr_t dummy[SMALL_CLEAR_SIZE];
 
       BZERO(CAST_AWAY_VOLATILE_PVOID(dummy), sizeof(dummy));
 #   endif
@@ -281,13 +281,13 @@ STATIC void GC_init_size_map(void)
 # else
     STATIC word GC_stack_last_cleared = 0;
                         /* GC_gc_no value when we last did this.        */
+    STATIC word GC_bytes_allocd_at_reset = 0;
     STATIC ptr_t GC_min_sp = NULL;
                         /* Coolest stack pointer value from which       */
                         /* we've already cleared the stack.             */
     STATIC ptr_t GC_high_water = NULL;
                         /* "hottest" stack pointer value we have seen   */
                         /* recently.  Degrades over time.               */
-    STATIC word GC_bytes_allocd_at_reset = 0;
 #   define DEGRADE_RATE 50
 # endif
 
@@ -309,7 +309,7 @@ STATIC void GC_init_size_map(void)
                                CLEARSTACK_LIMIT_MODIFIER ptr_t limit)
     {
 #     define CLEAR_SIZE 213 /* granularity */
-      volatile word dummy[CLEAR_SIZE];
+      volatile ptr_t dummy[CLEAR_SIZE];
 
       BZERO(CAST_AWAY_VOLATILE_PVOID(dummy), sizeof(dummy));
       if (HOTTER_THAN((/* no volatile */ ptr_t)limit, GC_approx_sp())) {
@@ -318,7 +318,7 @@ STATIC void GC_init_size_map(void)
       /* Make sure the recursive call is not a tail call, and the bzero */
       /* call is not recognized as dead code.                           */
 #     if defined(CPPCHECK)
-        GC_noop1(dummy[0]);
+        GC_noop1(ADDR(dummy[0]));
 #     else
         GC_noop1(COVERT_DATAFLOW(ADDR(dummy)));
 #     endif
@@ -350,7 +350,7 @@ STATIC void GC_init_size_map(void)
   {
     ptr_t sp = GC_approx_sp();  /* Hotter than actual sp */
 #   ifdef THREADS
-        word volatile dummy[SMALL_CLEAR_SIZE];
+        volatile ptr_t dummy[SMALL_CLEAR_SIZE];
 #   endif
 
 #   define SLOP 400
@@ -375,7 +375,7 @@ STATIC void GC_init_size_map(void)
       if (next_random_no() == 0) {
         ptr_t limit = sp;
 
-        MAKE_HOTTER(limit, BIG_CLEAR_SIZE * sizeof(word));
+        MAKE_HOTTER(limit, BIG_CLEAR_SIZE * sizeof(ptr_t));
         limit = PTR_ALIGN_DOWN(limit, 0x10);
                         /* Make it sufficiently aligned for assembly    */
                         /* implementations of GC_clear_stack_inner.     */
@@ -393,7 +393,7 @@ STATIC void GC_init_size_map(void)
       }
       /* Adjust GC_high_water.  */
       GC_ASSERT(GC_high_water != NULL);
-      MAKE_COOLER(GC_high_water, WORDS_TO_BYTES(DEGRADE_RATE) + GC_SLOP);
+      MAKE_COOLER(GC_high_water, PTRS_TO_BYTES(DEGRADE_RATE) + GC_SLOP);
       if (HOTTER_THAN(sp, GC_high_water))
           GC_high_water = sp;
       MAKE_HOTTER(GC_high_water, GC_SLOP);
@@ -430,7 +430,7 @@ GC_API void * GC_CALL GC_base(void * p)
     bottom_index *bi;
     hdr *hhdr;
     ptr_t limit;
-    word sz;
+    size_t sz;
 
     if (!EXPECT(GC_is_initialized, TRUE)) return NULL;
     h = HBLKPTR(r);
@@ -447,7 +447,7 @@ GC_API void * GC_CALL GC_base(void * p)
     if (HBLK_IS_FREE(hhdr)) return NULL;
 
     /* Make sure r points to the beginning of the object.       */
-    r = PTR_ALIGN_DOWN(r, WORDS_TO_BYTES(1));
+    r = PTR_ALIGN_DOWN(r, sizeof(ptr_t));
 
     sz = hhdr -> hb_sz;
     r -= HBLKDISPL(r) % sz;
@@ -477,7 +477,7 @@ GC_API size_t GC_CALL GC_size(const void * p)
     if (EXPECT(NULL == p, FALSE)) return 0;
 
     hhdr = HDR(p);
-    return (size_t)(hhdr -> hb_sz);
+    return hhdr -> hb_sz;
 }
 
 /* These getters remain unsynchronized for compatibility (since some    */
@@ -1331,8 +1331,16 @@ GC_API void GC_CALL GC_init(void)
       }
 #   endif
 #   if !defined(CPPCHECK)
+      GC_STATIC_ASSERT(sizeof(size_t) <= sizeof(ptrdiff_t));
+#     ifdef AO_HAVE_store
+        /* As of now, hb/mse_descr and hb_marks[i] might be treated */
+        /* as words but might be accessed atomically.               */
+        GC_STATIC_ASSERT(sizeof(AO_t) == sizeof(word));
+#     endif
       GC_STATIC_ASSERT(sizeof(ptrdiff_t) == sizeof(word));
       GC_STATIC_ASSERT(sizeof(signed_word) == sizeof(word));
+      GC_STATIC_ASSERT(sizeof(word) * 8 == CPP_WORDSZ);
+      GC_STATIC_ASSERT(sizeof(ptr_t) * 8 == CPP_PTRSZ);
       GC_STATIC_ASSERT(sizeof(ptr_t) == sizeof(GC_uintptr_t));
       GC_STATIC_ASSERT(sizeof(GC_oom_func) == sizeof(GC_funcptr_uint));
 #     ifdef FUNCPTR_IS_DATAPTR
@@ -1406,7 +1414,7 @@ GC_API void GC_CALL GC_init(void)
     }
     if (GC_all_interior_pointers)
       GC_initialize_offsets();
-    GC_register_displacement_inner(0L);
+    GC_register_displacement_inner(0);
 #   if defined(GC_LINUX_THREADS) && defined(REDIRECT_MALLOC)
       if (!GC_all_interior_pointers) {
         /* TLS ABI uses pointer-sized offsets for dtv. */
@@ -1850,32 +1858,35 @@ GC_API void GC_CALL GC_start_mark_threads(void)
 #     endif
       return (int)len;
 #   else
-      int bytes_written = 0;
+      size_t bytes_written = 0;
       IF_CANCEL(int cancel_state;)
 
       DISABLE_CANCEL(cancel_state);
-      while ((unsigned)bytes_written < len) {
-#        ifdef GC_SOLARIS_THREADS
-             int result = syscall(SYS_write, fd, buf + bytes_written,
-                                             len - bytes_written);
-#        elif defined(_MSC_VER)
-             int result = _write(fd, buf + bytes_written,
-                                 (unsigned)(len - bytes_written));
-#        else
-             int result = (int)write(fd, buf + bytes_written,
-                                     len - (size_t)bytes_written);
-#        endif
+      while (bytes_written < len) {
+        int result;
 
-         if (-1 == result) {
-             if (EAGAIN == errno) /* Resource temporarily unavailable */
-               continue;
-             RESTORE_CANCEL(cancel_state);
-             return result;
-         }
-         bytes_written += result;
+#       ifdef GC_SOLARIS_THREADS
+          result = syscall(SYS_write, fd, buf + bytes_written,
+                           len - bytes_written);
+#       elif defined(_MSC_VER)
+          result = _write(fd, buf + bytes_written,
+                          (unsigned)(len - bytes_written));
+#       else
+          result = (int)write(fd, buf + bytes_written, len - bytes_written);
+#       endif
+        if (result < 0) {
+          if (EAGAIN == errno) continue; /* resource temporarily unavailable */
+          RESTORE_CANCEL(cancel_state);
+          return -1;
+        }
+#       ifdef LINT2
+          if ((unsigned)result > len - bytes_written)
+            ABORT("write() result cannot be bigger than requested length");
+#       endif
+        bytes_written += (unsigned)result;
       }
       RESTORE_CANCEL(cancel_state);
-      return bytes_written;
+      return (int)bytes_written;
 #   endif
   }
 
@@ -2154,7 +2165,7 @@ GC_API void ** GC_CALL GC_new_free_list_inner(void)
     GC_ASSERT(I_HOLD_LOCK());
     result = GC_INTERNAL_MALLOC((MAXOBJGRANULES+1) * sizeof(ptr_t), PTRFREE);
     if (NULL == result) ABORT("Failed to allocate free list for new kind");
-    BZERO(result, (MAXOBJGRANULES+1)*sizeof(ptr_t));
+    BZERO(result, (MAXOBJGRANULES+1) * sizeof(ptr_t));
     return (void **)result;
 }
 
@@ -2305,17 +2316,19 @@ GC_API void * GC_CALL GC_call_with_stack_base(GC_stack_base_func fn, void *arg)
 
 #ifndef THREADS
 
-GC_INNER ptr_t GC_blocked_sp = NULL;
+  GC_INNER ptr_t GC_blocked_sp = NULL;
         /* NULL value means we are not inside GC_do_blocking() call. */
+
 # ifdef IA64
     STATIC ptr_t GC_blocked_register_sp = NULL;
 # endif
 
-GC_INNER struct GC_traced_stack_sect_s *GC_traced_stack_sect = NULL;
+  GC_INNER struct GC_traced_stack_sect_s *GC_traced_stack_sect = NULL;
 
-/* This is nearly the same as in pthread_support.c.     */
-GC_API void * GC_CALL GC_call_with_gc_active(GC_fn_type fn, void *client_data)
-{
+  /* This is nearly the same as in pthread_support.c.   */
+  GC_API void * GC_CALL GC_call_with_gc_active(GC_fn_type fn,
+                                               void *client_data)
+  {
     struct GC_traced_stack_sect_s stacksect;
     GC_ASSERT(GC_is_initialized);
 
@@ -2362,11 +2375,11 @@ GC_API void * GC_CALL GC_call_with_gc_active(GC_fn_type fn, void *client_data)
     GC_blocked_sp = stacksect.saved_stack_ptr;
 
     return client_data; /* result */
-}
+  }
 
-/* This is nearly the same as in pthread_support.c.     */
-STATIC void GC_do_blocking_inner(ptr_t data, void *context)
-{
+  /* This is nearly the same as in pthread_support.c.   */
+  STATIC void GC_do_blocking_inner(ptr_t data, void *context)
+  {
     struct blocking_data * d = (struct blocking_data *)data;
 
     UNUSED_ARG(context);
@@ -2392,7 +2405,7 @@ STATIC void GC_do_blocking_inner(ptr_t data, void *context)
       GC_noop1_ptr(GC_blocked_sp);
 #   endif
     GC_blocked_sp = NULL;
-}
+  }
 
   GC_API void GC_CALL GC_set_stackbottom(void *gc_thread_handle,
                                          const struct GC_stack_base *sb)
@@ -2473,24 +2486,15 @@ GC_API void * GC_CALL GC_do_blocking(GC_fn_type fn, void * client_data)
   }
 #endif /* !NO_DEBUGGING */
 
-static void GC_CALLBACK block_add_size(struct hblk *h, void *pbytes)
+GC_API GC_word GC_CALL GC_get_memory_use(void)
 {
-  const hdr *hhdr = HDR(h);
-
-  *(word *)pbytes += (hhdr -> hb_sz + HBLKSIZE-1) & ~(word)(HBLKSIZE-1);
-# if defined(CPPCHECK)
-    GC_noop1_ptr(h);
-# endif
-}
-
-GC_API size_t GC_CALL GC_get_memory_use(void)
-{
-  word bytes = 0;
+  word bytes;
 
   READER_LOCK();
-  GC_apply_to_all_blocks(block_add_size, &bytes);
+  GC_ASSERT(GC_heapsize >= GC_large_free_bytes);
+  bytes = GC_heapsize - GC_large_free_bytes;
   READER_UNLOCK();
-  return (size_t)bytes;
+  return bytes;
 }
 
 /* Getter functions for the public Read-only variables.                 */

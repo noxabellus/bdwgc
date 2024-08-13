@@ -11,7 +11,6 @@
  * Permission to modify the code and to distribute modified code is granted,
  * provided the above notices are retained, and a notice that the code was
  * modified is included with the above copyright notice.
- *
  */
 
 /* Private declarations of GC marker data structures and macros */
@@ -50,10 +49,6 @@ EXTERN_C_BEGIN
 
 /* The real declarations of the following is in gc_priv.h, so that      */
 /* we can avoid scanning GC_mark_procs table.                           */
-
-#ifndef MARK_DESCR_OFFSET
-# define MARK_DESCR_OFFSET sizeof(word)
-#endif
 
 /* Mark descriptor stuff that should remain private for now, mostly     */
 /* because it's hard to export CPP_WORDSZ without including gcconfig.h. */
@@ -141,8 +136,8 @@ GC_INLINE mse * GC_push_obj(ptr_t obj, const hdr * hhdr, mse * mark_stack_top,
     /* twice.  But that is only a performance issue.                    */
 #   define SET_MARK_BIT_EXIT_IF_SET(hhdr, bit_no) \
       { /* cannot use do-while(0) here */ \
-        volatile unsigned char * mark_byte_addr = \
-                        (unsigned char *)(hhdr)->hb_marks + (bit_no); \
+        volatile unsigned char *mark_byte_addr \
+                        = (unsigned char *)((hhdr) -> hb_marks) + (bit_no); \
         /* Unordered atomic load and store are sufficient here. */ \
         if (AO_char_load(mark_byte_addr) != 0) \
           break; /* go to the enclosing loop end */ \
@@ -151,52 +146,44 @@ GC_INLINE mse * GC_push_obj(ptr_t obj, const hdr * hhdr, mse * mark_stack_top,
 # else
 #   define SET_MARK_BIT_EXIT_IF_SET(hhdr, bit_no) \
       { /* cannot use do-while(0) here */ \
-        char * mark_byte_addr = (char *)(hhdr)->hb_marks + (bit_no); \
+        ptr_t mark_byte_addr = (ptr_t)((hhdr) -> hb_marks) + (bit_no); \
+        \
         if (*mark_byte_addr != 0) break; /* go to the enclosing loop end */ \
         *mark_byte_addr = 1; \
       }
 # endif /* !PARALLEL_MARK */
 #else
-# ifdef PARALLEL_MARK
+# if defined(PARALLEL_MARK) || (defined(THREAD_SANITIZER) && defined(THREADS))
+#   ifdef THREAD_SANITIZER
+#     define MARK_WORD_READ(addr) AO_load(addr)
+#   else
+#     define MARK_WORD_READ(addr) (*(addr))
+#   endif
     /* This is used only if we explicitly set USE_MARK_BITS.            */
     /* The following may fail to exit even if the bit was already set.  */
     /* For our uses, that's benign:                                     */
-#   ifdef THREAD_SANITIZER
-#     define OR_WORD_EXIT_IF_SET(addr, bits) \
+#   define SET_MARK_BIT_EXIT_IF_SET(hhdr, bit_no) \
         { /* cannot use do-while(0) here */ \
-          if (!((word)AO_load((volatile AO_t *)(addr)) & (bits))) { \
-                /* Atomic load is just to avoid TSan false positive. */ \
-            AO_or((volatile AO_t *)(addr), (AO_t)(bits)); \
-          } else { \
+          volatile AO_t *mark_word_addr \
+                                = (hhdr) -> hb_marks + divWORDSZ(bit_no); \
+          word my_bits = (word)1 << modWORDSZ(bit_no); \
+          \
+          if ((MARK_WORD_READ(mark_word_addr) & my_bits) != 0) \
             break; /* go to the enclosing loop end */ \
-          } \
+          AO_or(mark_word_addr, my_bits); \
         }
-#   else
-#     define OR_WORD_EXIT_IF_SET(addr, bits) \
-        { /* cannot use do-while(0) here */ \
-          if (!(*(addr) & (bits))) { \
-            AO_or((volatile AO_t *)(addr), (AO_t)(bits)); \
-          } else { \
-            break; /* go to the enclosing loop end */ \
-          } \
-        }
-#   endif /* !THREAD_SANITIZER */
 # else
-#   define OR_WORD_EXIT_IF_SET(addr, bits) \
+#   define SET_MARK_BIT_EXIT_IF_SET(hhdr, bit_no) \
         { /* cannot use do-while(0) here */ \
-           word old = *(addr); \
-           word my_bits = (bits); \
-           if ((old & my_bits) != 0) \
-             break; /* go to the enclosing loop end */ \
-           *(addr) = old | my_bits; \
+          word *mark_word_addr = (hhdr) -> hb_marks + divWORDSZ(bit_no); \
+          word old = *mark_word_addr; \
+          word my_bits = (word)1 << modWORDSZ(bit_no); \
+          \
+          if ((old & my_bits) != 0) \
+            break; /* go to the enclosing loop end */ \
+          *(mark_word_addr) = old | my_bits; \
         }
 # endif /* !PARALLEL_MARK */
-# define SET_MARK_BIT_EXIT_IF_SET(hhdr, bit_no) \
-    { /* cannot use do-while(0) here */ \
-        word * mark_word_addr = (hhdr)->hb_marks + divWORDSZ(bit_no); \
-        OR_WORD_EXIT_IF_SET(mark_word_addr, \
-                (word)1 << modWORDSZ(bit_no)); /* contains "break" */ \
-    }
 #endif /* !USE_MARK_BYTES */
 
 #ifdef ENABLE_TRACE
@@ -266,23 +253,23 @@ GC_INLINE mse * GC_push_contents_hdr(ptr_t current, mse * mark_stack_top,
         GC_ASSERT(ADDR_GE(current, (ptr_t)(hhdr -> hb_block)));
         gran_displ = 0;
       } else {
-#       ifndef MARK_BIT_PER_OBJ
-          size_t obj_displ = GRANULES_TO_BYTES(gran_offset) + byte_offset;
-
-#       else
+#       ifdef MARK_BIT_PER_OBJ
           unsigned32 low_prod;
 
           LONG_MULT(gran_displ, low_prod, (unsigned32)displ, inv_sz);
           if ((low_prod >> 16) != 0)
 #       endif
         {
-#         ifdef MARK_BIT_PER_OBJ
-            size_t obj_displ;
+          size_t obj_displ;
 
+#         ifdef MARK_BIT_PER_OBJ
             /* Accurate enough if HBLKSIZE <= 2**15.    */
             GC_STATIC_ASSERT(HBLKSIZE <= (1 << 15));
-            obj_displ = (((low_prod >> 16) + 1) * (size_t)hhdr->hb_sz) >> 16;
+            obj_displ = (((low_prod >> 16) + 1) * hhdr -> hb_sz) >> 16;
+#         else
+            obj_displ = GRANULES_TO_BYTES(gran_offset) + byte_offset;
 #         endif
+
           if (do_offset_check && !GC_valid_offsets[obj_displ]) {
             GC_ADD_TO_BLACK_LIST_NORMAL(current, source);
             break;

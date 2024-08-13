@@ -36,14 +36,14 @@
   GC_INNER int GC_has_other_debug_info(ptr_t base)
   {
     ptr_t body = (ptr_t)((oh *)base + 1);
-    word sz = GC_size(base);
+    size_t sz = GC_size(base);
 
     if (HBLKPTR(base) != HBLKPTR(body)
         || sz < DEBUG_BYTES + EXTRA_BYTES) {
       return 0;
     }
     if (((oh *)base) -> oh_sf != (START_FLAG ^ (GC_uintptr_t)body)
-        && ((GC_uintptr_t *)base)[BYTES_TO_WORDS(sz) - 1]
+        && ((GC_uintptr_t *)base)[BYTES_TO_PTRS(sz) - 1]
             != (END_FLAG ^ (GC_uintptr_t)body)) {
       return 0;
     }
@@ -79,8 +79,8 @@
   {
     if (GC_HAS_DEBUG_INFO(dest)) {
 #     ifdef PARALLEL_MARK
-        AO_store((volatile AO_t *)&((oh *)dest)->oh_back_ptr,
-                 (AO_t)HIDE_BACK_PTR(source));
+        GC_cptr_store((volatile ptr_t *)&(((oh *)dest) -> oh_back_ptr),
+                      (ptr_t)HIDE_BACK_PTR(source));
 #     else
         ((oh *)dest) -> oh_back_ptr = HIDE_BACK_PTR(source);
 #     endif
@@ -250,7 +250,7 @@
 #define CROSSES_HBLK(p, sz) \
                 ((ADDR((p) + sizeof(oh) + (sz) - 1) ^ ADDR(p)) >= HBLKSIZE)
 
-GC_INNER void *GC_store_debug_info_inner(void *base, word sz,
+GC_INNER void *GC_store_debug_info_inner(void *base, size_t sz,
                                          const char *string, int linenum)
 {
     GC_uintptr_t *result = (GC_uintptr_t *)((oh *)base + 1);
@@ -271,8 +271,8 @@ GC_INNER void *GC_store_debug_info_inner(void *base, word sz,
 #   else
       ((oh *)base) -> oh_sz = (GC_uintptr_t)sz;
       ((oh *)base) -> oh_sf = START_FLAG ^ (GC_uintptr_t)result;
-      ((GC_uintptr_t *)base)[BYTES_TO_WORDS(GC_size(base)) - 1]
-                        = result[SIMPLE_ROUNDED_UP_WORDS(sz)]
+      ((GC_uintptr_t *)base)[BYTES_TO_PTRS(GC_size(base)) - 1]
+                        = result[BYTES_TO_PTRS_ROUNDUP(sz)]
                         = END_FLAG ^ (GC_uintptr_t)result;
 #   endif
     return result;
@@ -293,7 +293,7 @@ static void *store_debug_info(void *base, size_t lb,
     LOCK();
     if (!GC_debugging_started)
         GC_start_debugging_inner();
-    result = GC_store_debug_info_inner(base, (word)lb, s, i);
+    result = GC_store_debug_info_inner(base, lb, s, i);
     ADD_CALL_CHAIN(base, ra);
     UNLOCK();
     return result;
@@ -306,7 +306,7 @@ static void *store_debug_info(void *base, size_t lb,
   STATIC ptr_t GC_check_annotated_obj(oh *ohdr)
   {
     ptr_t body = (ptr_t)(ohdr + 1);
-    word gc_sz = GC_size(ohdr);
+    size_t gc_sz = GC_size(ohdr);
 
     if (ohdr -> oh_sz + DEBUG_BYTES > (GC_uintptr_t)gc_sz) {
         return (ptr_t)(&(ohdr -> oh_sz));
@@ -314,13 +314,13 @@ static void *store_debug_info(void *base, size_t lb,
     if (ohdr -> oh_sf != (START_FLAG ^ (GC_uintptr_t)body)) {
         return (ptr_t)(&(ohdr -> oh_sf));
     }
-    if (((GC_uintptr_t *)ohdr)[BYTES_TO_WORDS(gc_sz) - 1]
+    if (((GC_uintptr_t *)ohdr)[BYTES_TO_PTRS(gc_sz) - 1]
             != (END_FLAG ^ (GC_uintptr_t)body)) {
-        return (ptr_t)(&((GC_uintptr_t *)ohdr)[BYTES_TO_WORDS(gc_sz) - 1]);
+        return (ptr_t)(&((GC_uintptr_t *)ohdr)[BYTES_TO_PTRS(gc_sz) - 1]);
     }
-    if (((GC_uintptr_t *)body)[SIMPLE_ROUNDED_UP_WORDS((size_t)(ohdr -> oh_sz))]
+    if (((GC_uintptr_t *)body)[BYTES_TO_PTRS_ROUNDUP((size_t)(ohdr -> oh_sz))]
             != (END_FLAG ^ (GC_uintptr_t)body)) {
-        return (ptr_t)(&((GC_uintptr_t *)body)[SIMPLE_ROUNDED_UP_WORDS(
+        return (ptr_t)(&((GC_uintptr_t *)body)[BYTES_TO_PTRS_ROUNDUP(
                                                 (size_t)(ohdr -> oh_sz))]);
     }
     return NULL;
@@ -471,7 +471,7 @@ GC_INNER void GC_start_debugging_inner(void)
 # endif
   GC_print_heap_obj = GC_debug_print_heap_obj_proc;
   GC_debugging_started = TRUE;
-  GC_register_displacement_inner((word)sizeof(oh));
+  GC_register_displacement_inner(sizeof(oh));
 # if defined(CPPCHECK)
     GC_noop1(GC_debug_header_size);
 # endif
@@ -487,7 +487,7 @@ GC_API void GC_CALL GC_debug_register_displacement(size_t offset)
 {
   LOCK();
   GC_register_displacement_inner(offset);
-  GC_register_displacement_inner((word)sizeof(oh) + offset);
+  GC_register_displacement_inner(sizeof(oh) + offset);
   UNLOCK();
 }
 
@@ -585,7 +585,7 @@ STATIC void * GC_debug_generic_malloc(size_t lb, int k, GC_EXTRA_PARAMS)
     }
     if (!GC_debugging_started)
         GC_start_debugging_inner();
-    result = GC_store_debug_info_inner(base, (word)lb, "INTERNAL", 0);
+    result = GC_store_debug_info_inner(base, lb, "INTERNAL", 0);
     ADD_CALL_CHAIN_INNER(base);
     return result;
   }
@@ -747,7 +747,7 @@ GC_API void GC_CALL GC_debug_free(void * p)
     } else {
 #     ifndef SHORT_DBG_HDRS
         ptr_t clobbered = GC_check_annotated_obj((oh *)base);
-        word sz = GC_size(base);
+        size_t sz = GC_size(base);
 
         if (clobbered != NULL) {
           GC_SET_HAVE_ERRORS(); /* no "release" barrier is needed */
@@ -780,18 +780,18 @@ GC_API void GC_CALL GC_debug_free(void * p)
           ) {
         GC_free(base);
       } else {
-        word i;
-        word sz = hhdr -> hb_sz;
-        word obj_sz = BYTES_TO_WORDS(sz - sizeof(oh));
+        size_t sz = hhdr -> hb_sz;
+        size_t i;
+        size_t lpw = BYTES_TO_PTRS(sz - sizeof(oh));
 
-        for (i = 0; i < obj_sz; ++i)
+        for (i = 0; i < lpw; ++i)
           ((GC_uintptr_t *)p)[i] = GC_FREED_MEM_MARKER;
         GC_ASSERT((GC_uintptr_t *)p + i == (GC_uintptr_t *)(base + sz));
         /* Update the counter even though the real deallocation */
         /* is deferred.                                         */
         LOCK();
 #       ifdef LINT2
-          GC_incr_bytes_freed((size_t)sz);
+          GC_incr_bytes_freed(sz);
 #       else
           GC_bytes_freed += sz;
 #       endif
@@ -935,10 +935,11 @@ GC_API GC_ATTR_MALLOC void * GC_CALL
     const hdr *hhdr = HDR(hbp);
     ptr_t p = hbp -> hb_body;
     ptr_t plim;
-    word sz = hhdr -> hb_sz;
-    word bit_no;
+    size_t sz = hhdr -> hb_sz;
+    size_t bit_no;
 
     UNUSED_ARG(dummy);
+    GC_ASSERT((ptr_t)(hhdr -> hb_block) == p);
     plim = sz > MAXOBJBYTES ? p : p + HBLKSIZE - sz;
     /* Go through all objects in block. */
     for (bit_no = 0; ADDR_GE(plim, p);
@@ -963,9 +964,9 @@ GC_API GC_ATTR_MALLOC void * GC_CALL
 
   GC_INNER GC_bool GC_check_leaked(ptr_t base)
   {
-    word i;
-    word obj_sz;
-    word *p;
+    size_t i;
+    size_t lpw;
+    ptr_t *p;
 
     if (
 #       if defined(KEEP_BACK_PTRS) || defined(MAKE_BACK_GRAPH)
@@ -975,10 +976,10 @@ GC_API GC_ATTR_MALLOC void * GC_CALL
       return TRUE; /* object has leaked */
 
     /* Validate freed object's content. */
-    p = (word *)(base + sizeof(oh));
-    obj_sz = BYTES_TO_WORDS(HDR(base) -> hb_sz - sizeof(oh));
-    for (i = 0; i < obj_sz; ++i)
-      if (p[i] != GC_FREED_MEM_MARKER) {
+    p = (ptr_t *)(base + sizeof(oh));
+    lpw = BYTES_TO_PTRS(HDR(base) -> hb_sz - sizeof(oh));
+    for (i = 0; i < lpw; ++i)
+      if ((GC_uintptr_t)p[i] != GC_FREED_MEM_MARKER) {
         GC_set_mark_bit(base); /* do not reclaim it in this cycle */
         GC_add_smashed((ptr_t)(&p[i])); /* alter-after-free detected */
         break; /* don't report any other smashed locations in the object */

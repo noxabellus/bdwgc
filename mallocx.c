@@ -46,7 +46,7 @@ GC_API int GC_CALL GC_get_kind_and_size(const void * p, size_t * psize)
     const hdr *hhdr = HDR(p);
 
     if (psize != NULL) {
-        *psize = (size_t)(hhdr -> hb_sz);
+        *psize = hhdr -> hb_sz;
     }
     return hhdr -> hb_obj_kind;
 }
@@ -96,7 +96,7 @@ GC_API void * GC_CALL GC_realloc(void * p, size_t lb)
       return NULL;
     }
     hhdr = HDR(HBLKPTR(p));
-    sz = (size_t)hhdr->hb_sz;
+    sz = hhdr -> hb_sz;
     obj_kind = hhdr -> hb_obj_kind;
     orig_sz = sz;
 
@@ -130,9 +130,8 @@ GC_API void * GC_CALL GC_realloc(void * p, size_t lb)
         /* But that is probably more expensive, since we may end up     */
         /* scanning a bunch of zeros during GC.)                        */
 #       ifdef AO_HAVE_store
-          GC_STATIC_ASSERT(sizeof(hhdr->hb_sz) == sizeof(AO_t));
-          AO_store((volatile AO_t *)&hhdr->hb_sz, (AO_t)sz);
-          AO_store((volatile AO_t *)&hhdr->hb_descr, (AO_t)descr);
+          AO_store(&(hhdr -> hb_sz), sz);
+          AO_store((AO_t *)&(hhdr -> hb_descr), descr);
 #       else
           {
             LOCK();
@@ -250,8 +249,7 @@ GC_API void GC_CALL GC_generic_malloc_many(size_t lb_adjusted, int k,
     void *op;
     void *p;
     void **opp;
-    size_t lw;  /* lb_adjusted converted to words,  */
-    size_t lg;  /* and to granules.                 */
+    size_t lg;  /* lb_adjusted value converted to granules */
     word my_bytes_allocd = 0;
     struct obj_kind *ok;
     struct hblk **rlh;
@@ -275,7 +273,6 @@ GC_API void GC_CALL GC_generic_malloc_many(size_t lb_adjusted, int k,
         return;
     }
     GC_ASSERT(k < MAXOBJKINDS);
-    lw = BYTES_TO_WORDS(lb_adjusted);
     lg = BYTES_TO_GRANULES(lb_adjusted);
     if (EXPECT(get_have_errors(), FALSE))
       GC_print_all_errors();
@@ -405,9 +402,8 @@ GC_API void GC_CALL GC_generic_malloc_many(size_t lb_adjusted, int k,
               UNLOCK();
               GC_release_mark_lock();
 
-              op = GC_build_fl(h, lw,
-                               ok -> ok_init || GC_debugging_started, 0);
-
+              op = GC_build_fl(h, NULL, lg,
+                               ok -> ok_init || GC_debugging_started);
               *result = op;
               GC_acquire_mark_lock();
               --GC_fl_builder_count;
@@ -417,7 +413,7 @@ GC_API void GC_CALL GC_generic_malloc_many(size_t lb_adjusted, int k,
               return;
             }
 #         endif
-          op = GC_build_fl(h, lw, ok -> ok_init || GC_debugging_started, 0);
+          op = GC_build_fl(h, NULL, lg, ok -> ok_init || GC_debugging_started);
           goto out;
         }
     }

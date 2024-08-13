@@ -43,7 +43,7 @@ int GC_no_dls = 0;      /* Register dynamic library data segments.      */
   /* Should return the same value as GC_root_size.      */
   GC_INNER word GC_compute_root_size(void)
   {
-    int i;
+    size_t i;
     word size = 0;
 
     for (i = 0; i < n_root_sets; i++) {
@@ -57,7 +57,7 @@ int GC_no_dls = 0;      /* Register dynamic library data segments.      */
   /* For debugging:     */
   void GC_print_static_roots(void)
   {
-    int i;
+    size_t i;
     word size;
 
     for (i = 0; i < n_root_sets; i++) {
@@ -79,20 +79,20 @@ int GC_no_dls = 0;      /* Register dynamic library data segments.      */
   /* Is the address p in one of the registered static root sections?      */
   GC_INNER GC_bool GC_is_static_root(ptr_t p)
   {
-    static int last_root_set = MAX_ROOT_SETS;
-    int i;
+    static size_t last_static_root_set = MAX_ROOT_SETS;
+    size_t i;
 
 #   if defined(CPPCHECK)
       if (n_root_sets > MAX_ROOT_SETS) ABORT("Bad n_root_sets");
 #   endif
-    if (last_root_set < n_root_sets
-        && ADDR_INSIDE(p, GC_static_roots[last_root_set].r_start,
-                       GC_static_roots[last_root_set].r_end))
+    if (last_static_root_set < n_root_sets
+        && ADDR_INSIDE(p, GC_static_roots[last_static_root_set].r_start,
+                       GC_static_roots[last_static_root_set].r_end))
       return TRUE;
     for (i = 0; i < n_root_sets; i++) {
         if (ADDR_INSIDE(p, GC_static_roots[i].r_start,
                         GC_static_roots[i].r_end)) {
-          last_root_set = i;
+          last_static_root_set = i;
           return TRUE;
         }
     }
@@ -111,7 +111,7 @@ int GC_no_dls = 0;      /* Register dynamic library data segments.      */
         -- really defined in gc_priv.h
 */
 
-  GC_INLINE int rt_hash(ptr_t addr)
+  GC_INLINE size_t rt_hash(ptr_t addr)
   {
     word val = ADDR(addr);
 
@@ -122,14 +122,14 @@ int GC_no_dls = 0;      /* Register dynamic library data segments.      */
       val ^= val >> (4*LOG_RT_SIZE);
 #   endif
     val ^= val >> (2*LOG_RT_SIZE);
-    return ((val >> LOG_RT_SIZE) ^ val) & (RT_SIZE-1);
+    return (size_t)((val >> LOG_RT_SIZE) ^ val) & (RT_SIZE-1);
   }
 
   /* Is a range starting at b already in the table? If so, return a     */
   /* pointer to it, else NULL.                                          */
   GC_INNER void * GC_roots_present(ptr_t b)
   {
-    int h;
+    size_t h;
     struct roots *p;
 
     GC_ASSERT(I_HOLD_READER_LOCK());
@@ -143,7 +143,7 @@ int GC_no_dls = 0;      /* Register dynamic library data segments.      */
   /* Add the given root structure to the index. */
   GC_INLINE void add_roots_to_index(struct roots *p)
   {
-    int h = rt_hash(p -> r_start);
+    size_t h = rt_hash(p -> r_start);
 
     p -> r_next = GC_root_index[h];
     GC_root_index[h] = p;
@@ -186,7 +186,7 @@ void GC_add_roots_inner(ptr_t b, ptr_t e, GC_bool tmp)
       /* virtually guaranteed to be dominated by the time it    */
       /* takes to scan the roots.                               */
       {
-        int i;
+        size_t i;
         struct roots * old = NULL; /* initialized to prevent warning. */
 
         for (i = 0; i < n_root_sets; i++) {
@@ -257,8 +257,8 @@ void GC_add_roots_inner(ptr_t b, ptr_t e, GC_bool tmp)
     }
 
 #   ifdef DEBUG_ADD_DEL_ROOTS
-      GC_log_printf("Adding data root section %d: %p .. %p%s\n",
-                    n_root_sets, (void *)b, (void *)e,
+      GC_log_printf("Adding data root section %u: %p .. %p%s\n",
+                    (unsigned)n_root_sets, (void *)b, (void *)e,
                     tmp ? " (temporary)" : "");
 #   endif
     GC_static_roots[n_root_sets].r_start = (ptr_t)b;
@@ -290,12 +290,13 @@ GC_API void GC_CALL GC_clear_roots(void)
     UNLOCK();
 }
 
-STATIC void GC_remove_root_at_pos(int i)
+STATIC void GC_remove_root_at_pos(size_t i)
 {
     GC_ASSERT(I_HOLD_LOCK());
+    GC_ASSERT(i < n_root_sets);
 #   ifdef DEBUG_ADD_DEL_ROOTS
-      GC_log_printf("Remove data root section at %d: %p .. %p%s\n",
-                    i, (void *)GC_static_roots[i].r_start,
+      GC_log_printf("Remove data root section at %u: %p .. %p%s\n",
+                    (unsigned)i, (void *)GC_static_roots[i].r_start,
                     (void *)GC_static_roots[i].r_end,
                     GC_static_roots[i].r_tmp ? " (temporary)" : "");
 #   endif
@@ -310,7 +311,8 @@ STATIC void GC_remove_root_at_pos(int i)
 #ifndef ANY_MSWIN
   STATIC void GC_rebuild_root_index(void)
   {
-    int i;
+    size_t i;
+
     BZERO(GC_root_index, RT_SIZE * sizeof(void *));
     for (i = 0; i < n_root_sets; i++)
         add_roots_to_index(GC_static_roots + i);
@@ -320,9 +322,9 @@ STATIC void GC_remove_root_at_pos(int i)
 #if defined(DYNAMIC_LOADING) || defined(ANY_MSWIN) || defined(PCR)
   STATIC void GC_remove_tmp_roots(void)
   {
-    int i;
-#   if !defined(MSWIN32) && !defined(MSWINCE) && !defined(CYGWIN32)
-      int old_n_roots = n_root_sets;
+    size_t i;
+#   ifndef ANY_MSWIN
+      size_t old_n_roots = n_root_sets;
 #   endif
 
     GC_ASSERT(I_HOLD_LOCK());
@@ -333,7 +335,7 @@ STATIC void GC_remove_root_at_pos(int i)
             i++;
         }
     }
-#   if !defined(MSWIN32) && !defined(MSWINCE) && !defined(CYGWIN32)
+#   ifndef ANY_MSWIN
       if (n_root_sets < old_n_roots)
         GC_rebuild_root_index();
 #   endif
@@ -356,9 +358,9 @@ GC_API void GC_CALL GC_remove_roots(void *b, void *e)
 
 STATIC void GC_remove_roots_inner(ptr_t b, ptr_t e)
 {
-    int i;
+    size_t i;
 #   ifndef ANY_MSWIN
-      int old_n_roots = n_root_sets;
+      size_t old_n_roots = n_root_sets;
 #   endif
 
     GC_ASSERT(I_HOLD_LOCK());
@@ -379,7 +381,7 @@ STATIC void GC_remove_roots_inner(ptr_t b, ptr_t e)
 #ifdef USE_PROC_FOR_LIBRARIES
   /* Exchange the elements of the roots table.  Requires rebuild of     */
   /* the roots index table after the swap.                              */
-  GC_INLINE void swap_static_roots(int i, int j)
+  GC_INLINE void swap_static_roots(size_t i, size_t j)
   {
     ptr_t r_start = GC_static_roots[i].r_start;
     ptr_t r_end = GC_static_roots[i].r_end;
@@ -399,18 +401,19 @@ STATIC void GC_remove_roots_inner(ptr_t b, ptr_t e)
   /* this function is called repeatedly by GC_register_map_entries.     */
   GC_INNER void GC_remove_roots_subregion(ptr_t b, ptr_t e)
   {
-    int i;
+    size_t i;
     GC_bool rebuild = FALSE;
 
     GC_ASSERT(I_HOLD_LOCK());
-    GC_ASSERT(ADDR(b) % sizeof(word) == 0 && ADDR(e) % sizeof(word) == 0);
+    GC_ASSERT(ADDR(b) % sizeof(ptr_t) == 0 && ADDR(e) % sizeof(ptr_t) == 0);
     for (i = 0; i < n_root_sets; i++) {
       ptr_t r_start, r_end;
 
       if (GC_static_roots[i].r_tmp) {
         /* The remaining roots are skipped as they are all temporary. */
 #       ifdef GC_ASSERTIONS
-          int j;
+          size_t j;
+
           for (j = i + 1; j < n_root_sets; j++) {
             GC_ASSERT(GC_static_roots[j].r_tmp);
           }
@@ -421,16 +424,16 @@ STATIC void GC_remove_roots_inner(ptr_t b, ptr_t e)
       r_end = GC_static_roots[i].r_end;
       if (!EXPECT(ADDR_GE(r_start, e) || ADDR_GE(b, r_end), TRUE)) {
 #       ifdef DEBUG_ADD_DEL_ROOTS
-          GC_log_printf("Removing %p .. %p from root section %d (%p .. %p)\n",
+          GC_log_printf("Removing %p .. %p from root section %u (%p .. %p)\n",
                         (void *)b, (void *)e,
-                        i, (void *)r_start, (void *)r_end);
+                        (unsigned)i, (void *)r_start, (void *)r_end);
 #       endif
         if (ADDR_LT(r_start, b)) {
           GC_root_size -= (word)(r_end - b);
           GC_static_roots[i].r_end = b;
           /* No need to rebuild as hash does not use r_end value. */
           if (ADDR_LT(e, r_end)) {
-            int j;
+            size_t j;
 
             if (rebuild) {
               GC_rebuild_root_index();
@@ -452,9 +455,9 @@ STATIC void GC_remove_roots_inner(ptr_t b, ptr_t e)
             GC_static_roots[i].r_start = e;
           } else {
             GC_remove_root_at_pos(i);
-            if (i < n_root_sets - 1 && GC_static_roots[i].r_tmp
+            if (i + 1 < n_root_sets && GC_static_roots[i].r_tmp
                 && !GC_static_roots[i + 1].r_tmp) {
-              int j;
+              size_t j;
 
               for (j = i + 2; j < n_root_sets; j++)
                 if (GC_static_roots[j].r_tmp)
@@ -480,20 +483,20 @@ STATIC void GC_remove_roots_inner(ptr_t b, ptr_t e)
   GC_API int GC_CALL GC_is_tmp_root(void *p)
   {
 #   ifndef HAS_REAL_READER_LOCK
-      static int last_root_set; /* initialized to 0; no shared access */
+      static size_t last_root_set; /* initialized to 0; no shared access */
 #   elif defined(AO_HAVE_load) || defined(AO_HAVE_store)
       static volatile AO_t last_root_set;
 #   else
-      static volatile int last_root_set;
+      static volatile size_t last_root_set;
                         /* A race is acceptable, it's just a cached index. */
 #   endif
-    int i;
+    size_t i;
     int res;
 
     READER_LOCK();
     /* First try the cached root. */
 #   if defined(AO_HAVE_load) && defined(HAS_REAL_READER_LOCK)
-      i = (int)(unsigned)AO_load(&last_root_set);
+      i = AO_load(&last_root_set);
 #   else
       i = last_root_set;
 #   endif
@@ -508,7 +511,7 @@ STATIC void GC_remove_roots_inner(ptr_t b, ptr_t e)
                         GC_static_roots[i].r_end)) {
           res = (int)GC_static_roots[i].r_tmp;
 #         if defined(AO_HAVE_store) && defined(HAS_REAL_READER_LOCK)
-            AO_store(&last_root_set, (AO_t)(unsigned)i);
+            AO_store(&last_root_set, i);
 #         else
             last_root_set = i;
 #         endif
@@ -600,7 +603,7 @@ GC_INNER void GC_exclude_static_roots_inner(ptr_t start, ptr_t finish)
     size_t next_index;
 
     GC_ASSERT(I_HOLD_LOCK());
-    GC_ASSERT(ADDR(start) % sizeof(word) == 0);
+    GC_ASSERT(ADDR(start) % sizeof(ptr_t) == 0);
     GC_ASSERT(ADDR_LT(start, finish));
 
     next = GC_next_exclusion(start);
@@ -645,9 +648,9 @@ GC_API void GC_CALL GC_exclude_static_roots(void *b, void *e)
 
     /* Round boundaries in direction reverse to that of GC_add_roots. */
     b = PTR_ALIGN_DOWN((ptr_t)b, sizeof(ptr_t));
-    e = PTR_ALIGN_UP((ptr_t)e, sizeof(ptr_t));
-    if (NULL == e)
-      e = (void *)(~(word)(sizeof(word)-1)); /* handle overflow */
+    e = EXPECT(ADDR(e) > ~(word)(sizeof(ptr_t)-1), FALSE)
+            ? PTR_ALIGN_DOWN((ptr_t)e, sizeof(ptr_t)) /* overflow */
+            : PTR_ALIGN_UP((ptr_t)e, sizeof(ptr_t));
 
     LOCK();
     GC_exclude_static_roots_inner((ptr_t)b, (ptr_t)e);
@@ -688,7 +691,8 @@ STATIC void GC_push_conditional_with_exclusions(ptr_t bottom, ptr_t top,
 #ifdef IA64
   /* Similar to GC_push_all_stack_sections() but for IA-64 registers store. */
   GC_INNER void GC_push_all_register_sections(ptr_t bs_lo, ptr_t bs_hi,
-                  int eager, struct GC_traced_stack_sect_s *traced_stack_sect)
+                        GC_bool eager,
+                        struct GC_traced_stack_sect_s *traced_stack_sect)
   {
     GC_ASSERT(I_HOLD_LOCK());
     while (traced_stack_sect != NULL) {
@@ -920,7 +924,7 @@ STATIC void GC_push_regs_and_stack(ptr_t cold_gc_frame)
 /* that it is OK to miss some register values.                          */
 GC_INNER void GC_push_roots(GC_bool all, ptr_t cold_gc_frame)
 {
-    int i;
+    size_t i;
     unsigned kind;
 
     GC_ASSERT(I_HOLD_LOCK());
@@ -951,6 +955,7 @@ GC_INNER void GC_push_roots(GC_bool all, ptr_t cold_gc_frame)
     /* marking the freelists.                                           */
     for (kind = 0; kind < GC_n_kinds; kind++) {
         const void *base = GC_base(GC_obj_kinds[kind].ok_freelist);
+
         if (base != NULL) {
             GC_set_mark_bit(base);
         }

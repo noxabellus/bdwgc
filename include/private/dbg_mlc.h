@@ -116,12 +116,9 @@ typedef struct {
   /* Add space for END_FLAG, but use any extra space that was already   */
   /* added to catch off-the-end pointers.                               */
   /* For uncollectible objects, the extra byte is not added.            */
-# define UNCOLLECTABLE_DEBUG_BYTES (sizeof(oh) + sizeof(word))
+# define UNCOLLECTABLE_DEBUG_BYTES (sizeof(oh) + sizeof(GC_uintptr_t))
 # define DEBUG_BYTES (UNCOLLECTABLE_DEBUG_BYTES - EXTRA_BYTES)
 #endif
-
-/* Round bytes to words without adding extra byte at end.       */
-#define SIMPLE_ROUNDED_UP_WORDS(n) BYTES_TO_WORDS((n) + WORDS_TO_BYTES(1) - 1)
 
 /* ADD_CALL_CHAIN stores a (partial) call chain into an object  */
 /* header; it should be called with the allocator lock held.    */
@@ -171,8 +168,8 @@ typedef struct {
 # endif
 # if defined(PARALLEL_MARK) && defined(KEEP_BACK_PTRS)
 #   define GC_HAS_DEBUG_INFO(base) \
-                ((AO_load((volatile AO_t *)(base)) & 1) != 0 \
-                 && GC_has_other_debug_info(base) > 0)
+        (((GC_uintptr_t)GC_cptr_load((volatile ptr_t *)(base)) & 1) != 0 \
+         && GC_has_other_debug_info(base) > 0)
                         /* Atomic load is used as GC_store_back_pointer */
                         /* stores oh_back_ptr atomically (base might    */
                         /* point to the field); this prevents a TSan    */
