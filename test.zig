@@ -1,5 +1,5 @@
 const std = @import("std");
-const gc = @import("libgc");
+const gc = @import("bdwgc");
 
 test "GcAllocator" {
     std.debug.print("GcAllocator start\n", .{});

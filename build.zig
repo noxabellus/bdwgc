@@ -635,7 +635,7 @@ pub fn build(b: *std.Build) void {
     }
 
     // add zig allocator module for use by zig projects
-    const mod = b.addModule("libgc", .{
+    const mod = b.addModule("bdwgc", .{
         .root_source_file = b.path("module.zig"),
         .target = target,
         .optimize = optimize,
@@ -657,7 +657,7 @@ pub fn build(b: *std.Build) void {
     });
 
     testMod.linkLibC();
-    testMod.root_module.addImport("libgc", mod);
+    testMod.root_module.addImport("bdwgc", mod);
 
     const runTestMod = b.addRunArtifact(testMod);
 
