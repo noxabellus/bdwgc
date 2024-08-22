@@ -29,7 +29,7 @@ const mem = std.mem;
 const Allocator = std.mem.Allocator;
 
 const gc = @cImport({
-    @cInclude("gc.h");
+    @cInclude("gc/gc.h");
     @cInclude("gc/gc_mark.h");
 });
 
@@ -160,16 +160,22 @@ pub const GcAllocator = struct {
         new_len: usize,
         return_address: usize,
     ) bool {
+        _ = buf;
         _ = log2_buf_align;
+        _ = new_len;
         _ = return_address;
-        if (new_len <= buf.len) {
-            return true;
-        }
 
-        const full_len = alignedAllocSize(buf.ptr);
-        if (new_len <= full_len) {
-            return true;
-        }
+        // BUG: the assertion always fails, so we can't use realloc.
+        // however, doing nothing in the case outlined by the `if` is not safe,
+        // as it will cause any pointers held in this allocation to get leaked.
+        // so, the best thing to do is just always return false, and allow callers to handle the failure.
+        // (e.g. see the implementation of `shrinkAndFree` in `std.Arraylist`)
+        // if (new_len <= buf.len
+        // or  new_len <= alignedAllocSize(buf.ptr)) {
+        //     const new_ptr: [*]u8 = @ptrCast(gc.GC_realloc(buf.ptr, new_len));
+        //     std.debug.assert(new_ptr == buf.ptr);
+        //     return true;
+        // }
 
         return false;
     }
