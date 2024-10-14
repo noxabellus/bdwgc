@@ -116,7 +116,7 @@ endif
 endif
 
 # Include THREADDLLIBS here to ensure that the correct versions of
-# linuxthread semaphore (and clock_gettime) functions get linked:
+# LinuxThreads semaphore (and clock_gettime) functions get linked:
 libgc_la_LIBADD = @addobjs@ $(THREADDLLIBS) $(UNWINDLIBS) $(ATOMIC_OPS_LIBS)
 libgc_la_DEPENDENCIES = @addobjs@
 libgc_la_LDFLAGS = $(extra_ldflags_libgc) -version-info $(LIBGC_VER_INFO) \
@@ -189,12 +189,9 @@ EXTRA_DIST += Makefile.direct NT_MAKEFILE WCC_MAKEFILE digimars.mak \
 # files used by makefiles other than Makefile.am
 #
 EXTRA_DIST += tools/if_mach.c tools/if_not_there.c tools/setjmp_t.c \
-    tools/threadlibs.c extra/MacOS.c extra/AmigaOS.c \
+    tools/threadlibs.c tools/callprocs.sh extra/msvc_dbg.c \
     extra/symbian/global_end.cpp extra/symbian/global_start.cpp \
-    extra/symbian/init_global_static_roots.cpp extra/symbian.cpp \
-    extra/pcr_interface.c extra/real_malloc.c \
-    extra/Mac_files/datastart.c extra/Mac_files/dataend.c \
-    extra/Mac_files/MacOS_config.h extra/msvc_dbg.c tools/callprocs.sh
+    extra/symbian/init_global_static_roots.cpp extra/symbian.cpp
 
 #
 # :GOTCHA: GNU make rule for making .s out of .S is flawed,
@@ -239,7 +236,6 @@ dist_docdocs_DATA = \
 docdocsplatformsdir = $(docdocsdir)/platforms
 dist_docdocsplatforms_DATA = \
     docs/platforms/README.aix \
-    docs/platforms/README.amiga \
     docs/platforms/README.arm_cross \
     docs/platforms/README.darwin \
     docs/platforms/README.dgux386 \
@@ -247,7 +243,6 @@ dist_docdocsplatforms_DATA = \
     docs/platforms/README.ews4800 \
     docs/platforms/README.hp \
     docs/platforms/README.linux \
-    docs/platforms/README.mac \
     docs/platforms/README.os2 \
     docs/platforms/README.sgi \
     docs/platforms/README.solaris2 \

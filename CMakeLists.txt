@@ -806,7 +806,7 @@ if (install_headers)
     install(FILES include/gc/gc_gcj.h
             DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/gc")
   endif()
-  if (enable_threads AND CMAKE_USE_PTHREADS_INIT)
+  if (enable_threads)
     install(FILES include/gc/gc_pthread_redirects.h
             DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/gc")
   endif()
@@ -981,7 +981,6 @@ if (enable_docs)
           DESTINATION "${CMAKE_INSTALL_DOCDIR}/docs")
   install(FILES
             docs/platforms/README.aix
-            docs/platforms/README.amiga
             docs/platforms/README.arm_cross
             docs/platforms/README.darwin
             docs/platforms/README.dgux386
@@ -989,7 +988,6 @@ if (enable_docs)
             docs/platforms/README.ews4800
             docs/platforms/README.hp
             docs/platforms/README.linux
-            docs/platforms/README.mac
             docs/platforms/README.os2
             docs/platforms/README.sgi
             docs/platforms/README.solaris2
