@@ -81,11 +81,13 @@ EXTERN_C_BEGIN
 /* Machine specific parts contributed by various people.  See README file. */
 
 #if defined(__ANDROID__) && !defined(HOST_ANDROID)
-/* __ANDROID__ macro is defined by Android NDK gcc.   */
+/* A Linux-based OS.                                */
+/* __ANDROID__ macro is defined by Android NDK gcc. */
 #  define HOST_ANDROID 1
 #endif
 
 #if defined(TIZEN) && !defined(HOST_TIZEN)
+/* A Linux-based OS.    */
 #  define HOST_TIZEN 1
 #endif
 
@@ -97,7 +99,8 @@ EXTERN_C_BEGIN
 #endif
 
 /* First a unified test for Linux: */
-#if (defined(linux) || defined(__linux__) || defined(HOST_ANDROID)) \
+#if (defined(linux) || defined(__linux__) || defined(HOST_ANDROID) \
+     || defined(HOST_TIZEN))                                       \
     && !defined(LINUX) && !defined(__native_client__)
 #  define LINUX
 #endif
@@ -259,7 +262,7 @@ EXTERN_C_BEGIN
 #  define DRSNX
 #  define mach_type_known
 #endif
-#if defined(_IBMR2)
+#if defined(_IBMR2) /* && defined(_AIX) */
 #  define POWERPC
 #  define AIX
 #  define mach_type_known
@@ -806,12 +809,30 @@ EXTERN_C_BEGIN
 
 #ifdef COSMO
 #  define OS_TYPE "COSMO"
-#  define LINUX_STACKBOTTOM
+#  define HEURISTIC1 /* relies on pthread_attr_getstack actually */
+#  define STACK_GRAN 0x1000000
+#  ifndef USE_GET_STACKBASE_FOR_MAIN
+#    define USE_GET_STACKBASE_FOR_MAIN
+#  endif
 extern int __data_start[] __attribute__((__weak__));
 #  define DATASTART ((ptr_t)__data_start)
 extern int _end[];
 #  define DATAEND ((ptr_t)_end)
 #  define USE_MMAP_ANON
+#  ifndef HAVE_CLOCK_GETTIME
+#    define HAVE_CLOCK_GETTIME 1
+#  endif
+#  ifndef HAVE_PTHREAD_SETNAME_NP_WITH_TID
+/* Normally should be defined by configure, etc. */
+#    define HAVE_PTHREAD_SETNAME_NP_WITH_TID 1
+#  endif
+#  if !defined(GC_THREADS) || defined(NO_HANDLE_FORK) \
+      || defined(GC_NO_CAN_CALL_ATFORK)
+#    define MPROTECT_VDB
+/* FIXME: otherwise gctest crashes in child */
+#  endif
+#  /* FIXME: a deadlock occurs in markers, thus disabled for now */
+#  undef PARALLEL_MARK
 #endif /* COSMO */
 
 #ifdef DARWIN
@@ -854,7 +875,7 @@ extern int _apps_bss_end[];
 extern char etext[];
 #    define DATASTART GC_FreeBSDGetDataStart(0x1000, (ptr_t)etext)
 #    define DATASTART_USES_BSDGETDATASTART
-#    ifndef GC_FREEBSD_THREADS
+#    ifndef GC_THREADS
 #      define MPROTECT_VDB
 #    endif
 #  endif
@@ -990,7 +1011,7 @@ extern char etext[];
 
 #ifdef OPENBSD
 #  define OS_TYPE "OPENBSD"
-#  ifndef GC_OPENBSD_THREADS
+#  ifndef GC_THREADS
 #    define HEURISTIC2
 #  endif
 #  ifdef __ELF__
@@ -1813,7 +1834,7 @@ extern char **environ;
 extern int __start[];
 #    define HEURISTIC2_LIMIT \
       ((ptr_t)((word)(__start) & ~(word)(getpagesize() - 1)))
-#    ifndef GC_OSF1_THREADS
+#    ifndef GC_THREADS
 /* Unresolved signal issues with threads.     */
 #      define MPROTECT_VDB
 #    endif
@@ -2053,7 +2074,7 @@ extern void *__stack_base__;
 #endif /* AARCH64 */
 
 #ifdef ARM32
-#  if defined(NACL)
+#  ifdef NACL
 #    define MACH_TYPE "NACL"
 #  else
 #    define MACH_TYPE "ARM32"
@@ -2079,9 +2100,6 @@ extern char **__environ;
 #    define DARWIN_DONT_PARSE_STACK 1
 #    define STACKBOTTOM ((ptr_t)0x30000000)
 /* MPROTECT_VDB causes use of non-public API.     */
-#  endif
-#  ifdef NACL
-/* Nothing specific. */
 #  endif
 #  ifdef NETBSD
 /* Nothing specific. */
@@ -2432,6 +2450,18 @@ extern char __global_base, __heap_base;
 #  endif
 #endif /* WEBASSEMBLY */
 
+#if defined(CYGWIN32) || defined(MSWIN32) || defined(MSWINCE)
+/* Note: it does not include Xbox One.  */
+#  define ANY_MSWIN
+#endif
+
+#if defined(GC_PTHREADS) || defined(GC_WIN32_THREADS)          \
+    || ((defined(NN_PLATFORM_CTR) || defined(NINTENDO_SWITCH)  \
+         || defined(SN_TARGET_PS3) || defined(SN_TARGET_PSP2)) \
+        && defined(GC_THREADS))
+#  define THREADS
+#endif
+
 #if defined(__GLIBC__) && !defined(DONT_USE_LIBC_PRIVATES)
 /* Use glibc's stack-end marker. */
 #  define USE_LIBC_PRIVATES
@@ -2459,8 +2489,14 @@ extern char __global_base, __heap_base;
 #  define USE_MMAP_ANON
 #endif
 
-#if defined(GC_LINUX_THREADS) && defined(REDIRECT_MALLOC) \
-    && !defined(USE_PROC_FOR_LIBRARIES) && !defined(NO_PROC_FOR_LIBRARIES)
+#if defined(REDIRECT_MALLOC) && defined(THREADS) \
+    && (defined(LINUX) || defined(NACL))
+/* TODO: Unclear if NaCl really needs this. */
+#  define REDIR_MALLOC_AND_LINUXTHREADS
+#endif
+
+#if defined(REDIR_MALLOC_AND_LINUXTHREADS) && !defined(NO_PROC_FOR_LIBRARIES) \
+    && !defined(USE_PROC_FOR_LIBRARIES)
 /* Nptl allocates thread stacks with mmap, which is fine.  But it   */
 /* keeps a cache of thread stacks.  Thread stacks contain the       */
 /* thread control blocks.  These in turn contain a pointer to       */
@@ -2511,14 +2547,13 @@ extern int __end__[];
 #  define SVR4
 #endif
 
-#if defined(CYGWIN32) || defined(MSWIN32) || defined(MSWINCE)
-#  define ANY_MSWIN
-#endif
-
 #if defined(HAVE_SYS_TYPES_H)                                  \
     || !(defined(__CC_ARM) || defined(OS2) || defined(MSWINCE) \
          || defined(SN_TARGET_ORBIS) || defined(SN_TARGET_PSP2))
 EXTERN_C_END
+#  if defined(COSMO) && defined(MPROTECT_VDB) && !defined(_GNU_SOURCE)
+#    define _GNU_SOURCE 1
+#  endif
 #  include <sys/types.h>
 EXTERN_C_BEGIN
 #endif /* HAVE_SYS_TYPES_H */
@@ -2561,22 +2596,19 @@ EXTERN_C_BEGIN
 #  define SUNOS5SIGS
 #endif
 
-#if defined(HPUX)
+#if (defined(FREEBSD)                                     \
+     && (defined(__DragonFly__) || defined(__GLIBC__)     \
+         || __FreeBSD_kernel__ >= 4 || __FreeBSD__ >= 4)) \
+    || defined(HPUX)
 #  define SUNOS5SIGS
 #endif
 
-#if defined(FREEBSD)                                                          \
-    && (defined(__DragonFly__) || __FreeBSD__ >= 4 || __FreeBSD_kernel__ >= 4 \
-        || defined(__GLIBC__))
-#  define SUNOS5SIGS
-#endif
-
-#if defined(ANY_BSD) || defined(HAIKU) || defined(HURD) || defined(IRIX5) \
-    || defined(OSF1) || defined(SUNOS5SIGS)
+#if defined(ANY_BSD) || defined(COSMO) || defined(HAIKU) || defined(HURD) \
+    || defined(IRIX5) || defined(OSF1) || defined(SUNOS5SIGS)
 #  define USE_SEGV_SIGACT
 #  if defined(IRIX5) && defined(_sigargs) /* Irix 5.x, not 6.x */   \
       || (defined(FREEBSD) && defined(SUNOS5SIGS)) || defined(HPUX) \
-      || defined(HURD) || defined(NETBSD)
+      || defined(COSMO) || defined(HURD) || defined(NETBSD)
 /* We may get SIGBUS.       */
 #    define USE_BUS_SIGACT
 #  endif
@@ -2610,7 +2642,7 @@ EXTERN_C_BEGIN
 #  define NO_MARKER_SPECIAL_SIGMASK
 #endif
 
-#ifdef GC_NETBSD_THREADS
+#if defined(NETBSD) && defined(THREADS)
 #  define SIGRTMIN 33
 #  define SIGRTMAX 63
 /* It seems to be necessary to wait until threads have restarted.     */
@@ -2618,11 +2650,11 @@ EXTERN_C_BEGIN
 #  define GC_NETBSD_THREADS_WORKAROUND
 #endif
 
-#ifdef GC_OPENBSD_THREADS
+#if defined(OPENBSD) && defined(THREADS)
 EXTERN_C_END
 #  include <sys/param.h>
 EXTERN_C_BEGIN
-#endif /* GC_OPENBSD_THREADS */
+#endif
 
 #if defined(AIX) || defined(ANY_BSD) || defined(BSD) || defined(COSMO)     \
     || defined(DARWIN) || defined(DGUX) || defined(HAIKU) || defined(HPUX) \
@@ -2740,7 +2772,7 @@ EXTERN_C_BEGIN
 #  undef MPROTECT_VDB
 #endif
 
-#if defined(USE_PROC_FOR_LIBRARIES) && defined(GC_LINUX_THREADS)
+#if defined(USE_PROC_FOR_LIBRARIES) && defined(LINUX) && defined(THREADS)
 /* Incremental GC based on mprotect is incompatible with /proc roots. */
 #  undef MPROTECT_VDB
 #endif
@@ -2825,13 +2857,12 @@ EXTERN_C_BEGIN
 #  endif
 #endif
 
-#if ((defined(UNIX_LIKE)                                            \
-      && (defined(DARWIN) || defined(HAIKU) || defined(HURD)        \
-          || defined(OPENBSD) || defined(QNX) || defined(ARM32)     \
-          || defined(AVR32) || defined(MIPS) || defined(NIOS2)      \
-          || defined(OR1K)))                                        \
-     || (defined(LINUX) && !defined(__gnu_linux__))                 \
-     || (defined(RTEMS) && defined(I386)) || defined(HOST_ANDROID)) \
+#if (((defined(ARM32) || defined(AVR32) || defined(MIPS) || defined(NIOS2)    \
+       || defined(OR1K) || defined(DARWIN) || defined(HAIKU) || defined(HURD) \
+       || defined(OPENBSD) || defined(QNX))                                   \
+      && defined(UNIX_LIKE))                                                  \
+     || defined(HOST_ANDROID) || defined(RTEMS)                               \
+     || (defined(LINUX) && !defined(__gnu_linux__)))                          \
     && !defined(NO_GETCONTEXT)
 #  define NO_GETCONTEXT 1
 #endif
@@ -2933,13 +2964,12 @@ extern ptr_t GC_data_start;
 /* code are forwarded to real (libc) calloc without any special */
 /* handling on the libgc side.  Checking glibc version at       */
 /* compile time for the purpose seems to be fine.               */
-#if defined(GC_LINUX_THREADS) && defined(REDIRECT_MALLOC) \
-    && defined(__GLIBC__) && !GC_GLIBC_PREREQ(2, 34)      \
-    && !defined(HAVE_LIBPTHREAD_SO)
+#if defined(REDIR_MALLOC_AND_LINUXTHREADS) && !defined(HAVE_LIBPTHREAD_SO) \
+    && defined(__GLIBC__) && !GC_GLIBC_PREREQ(2, 34)
 #  define HAVE_LIBPTHREAD_SO
 #endif
 
-#if defined(GC_LINUX_THREADS) && defined(REDIRECT_MALLOC) \
+#if defined(REDIR_MALLOC_AND_LINUXTHREADS) \
     && !defined(INCLUDE_LINUX_THREAD_DESCR)
 /* Will not work, since libc and the dynamic loader use thread        */
 /* locals, sometimes as the only reference.                           */
@@ -2947,41 +2977,26 @@ extern ptr_t GC_data_start;
 #endif
 
 #if !defined(CPPCHECK)
-#  if defined(GC_IRIX_THREADS) && !defined(IRIX5)
+#  if defined(GC_AIX_THREADS) && !defined(AIX)                            \
+      || (defined(GC_DARWIN_THREADS) && !defined(DARWIN))                 \
+      || (defined(GC_DGUX386_THREADS) && !defined(DGUX))                  \
+      || (defined(GC_FREEBSD_THREADS) && !defined(FREEBSD))               \
+      || (defined(GC_HAIKU_THREADS) && !defined(HAIKU))                   \
+      || (defined(GC_HPUX_THREADS) && !defined(HPUX))                     \
+      || (defined(GC_IRIX_THREADS) && !defined(IRIX5))                    \
+      || (defined(GC_LINUX_THREADS) && !defined(LINUX) && !defined(NACL)) \
+      || (defined(GC_NETBSD_THREADS) && !defined(NETBSD))                 \
+      || (defined(GC_OPENBSD_THREADS) && !defined(OPENBSD))               \
+      || (defined(GC_OSF1_THREADS) && !defined(OSF1))                     \
+      || (defined(GC_RTEMS_PTHREADS) && !defined(RTEMS))                  \
+      || (defined(GC_SOLARIS_THREADS) && !defined(SOLARIS))               \
+      || (defined(GC_WIN32_THREADS) && !defined(ANY_MSWIN)                \
+          && !defined(MSWIN_XBOX1))
 #    error Inconsistent configuration
-#  endif
-#  if defined(GC_LINUX_THREADS) && !defined(LINUX) && !defined(NACL)
-#    error Inconsistent configuration
-#  endif
-#  if defined(GC_NETBSD_THREADS) && !defined(NETBSD)
-#    error Inconsistent configuration
-#  endif
-#  if defined(GC_FREEBSD_THREADS) && !defined(FREEBSD)
-#    error Inconsistent configuration
-#  endif
-#  if defined(GC_SOLARIS_THREADS) && !defined(SOLARIS)
-#    error Inconsistent configuration
-#  endif
-#  if defined(GC_HPUX_THREADS) && !defined(HPUX)
-#    error Inconsistent configuration
-#  endif
-#  if defined(GC_AIX_THREADS) && !defined(_AIX)
-#    error Inconsistent configuration
-#  endif
-#  if defined(GC_WIN32_THREADS) && !defined(ANY_MSWIN) && !defined(MSWIN_XBOX1)
-#    error Inconsistent configuration
-#  endif
-#  if defined(GC_WIN32_PTHREADS) && defined(CYGWIN32)
-#    error Inconsistent configuration
+#  elif defined(GC_WIN32_PTHREADS) && defined(CYGWIN32)
+#    error Inconsistent configuration (GC_PTHREADS)
 #  endif
 #endif /* !CPPCHECK */
-
-#if defined(GC_PTHREADS) || defined(GC_WIN32_THREADS)          \
-    || ((defined(NN_PLATFORM_CTR) || defined(NINTENDO_SWITCH)  \
-         || defined(SN_TARGET_PS3) || defined(SN_TARGET_PSP2)) \
-        && defined(GC_THREADS))
-#  define THREADS
-#endif
 
 #if defined(PARALLEL_MARK) && !defined(THREADS) && !defined(CPPCHECK)
 #  error Invalid config: PARALLEL_MARK requires GC_THREADS
@@ -3004,9 +3019,8 @@ extern ptr_t GC_data_start;
 #  endif
 #endif
 
-#if defined(GC_PTHREADS) && !defined(GC_DARWIN_THREADS)            \
-    && !defined(GC_WIN32_THREADS) && !defined(PLATFORM_STOP_WORLD) \
-    && !defined(SN_TARGET_PSP2)
+#if defined(GC_PTHREADS) && !defined(DARWIN) && !defined(GC_WIN32_THREADS) \
+    && !defined(PLATFORM_STOP_WORLD) && !defined(SN_TARGET_PSP2)
 #  define PTHREAD_STOP_WORLD_IMPL
 #endif
 
@@ -3086,7 +3100,7 @@ extern ptr_t GC_data_start;
 #endif
 
 #ifndef GC_NO_THREADS_DISCOVERY
-#  ifdef GC_DARWIN_THREADS
+#  if defined(DARWIN) && defined(THREADS)
 /* Task-based thread registration requires stack-frame-walking code. */
 #    if defined(DARWIN_DONT_PARSE_STACK)
 #      define GC_NO_THREADS_DISCOVERY
@@ -3109,7 +3123,7 @@ extern ptr_t GC_data_start;
 #endif
 
 #if defined(PARALLEL_MARK) && !defined(DEFAULT_STACK_MAYBE_SMALL) \
-    && (defined(HPUX) || defined(GC_DGUX386_THREADS)              \
+    && (defined(DGUX) || defined(HPUX)                            \
         || defined(NO_GETCONTEXT) /* e.g. musl */)
 /* TODO: Test default stack size in configure. */
 #  define DEFAULT_STACK_MAYBE_SMALL
@@ -3129,8 +3143,8 @@ extern ptr_t GC_data_start;
 #endif
 
 /* Outline pthread primitives to use in GC_get_[main_]stack_base.       */
-#if ((defined(FREEBSD) && defined(__GLIBC__)) /* kFreeBSD */ \
-     || defined(LINUX) || defined(KOS) || defined(NETBSD))   \
+#if ((defined(FREEBSD) && defined(__GLIBC__)) /* kFreeBSD */                 \
+     || defined(COSMO) || defined(LINUX) || defined(KOS) || defined(NETBSD)) \
     && !defined(NO_PTHREAD_GETATTR_NP)
 #  define HAVE_PTHREAD_GETATTR_NP 1
 #elif defined(FREEBSD) && !defined(__GLIBC__) \
@@ -3189,9 +3203,9 @@ extern ptr_t GC_data_start;
 
 /* Workaround "failed to create new win32 semaphore" Cygwin fatal error */
 /* during semaphores fixup-after-fork.                                  */
-#if defined(CYGWIN32) && defined(GC_WIN32_THREADS)                     \
-    && defined(CAN_HANDLE_FORK) && !defined(EMULATE_PTHREAD_SEMAPHORE) \
-    && !defined(CYGWIN_SEM_FIXUP_AFTER_FORK_BUG_FIXED)
+#if defined(CYGWIN32) && defined(THREADS) && defined(CAN_HANDLE_FORK) \
+    && !defined(CYGWIN_SEM_FIXUP_AFTER_FORK_BUG_FIXED)                \
+    && !defined(EMULATE_PTHREAD_SEMAPHORE)
 #  define EMULATE_PTHREAD_SEMAPHORE
 #endif
 
@@ -3222,9 +3236,9 @@ extern ptr_t GC_data_start;
 #  define NO_GETENV_WIN32
 #endif
 
-#if !defined(MSGBOX_ON_ERROR) && !defined(NO_MSGBOX_ON_ERROR)                 \
-    && !defined(SMALL_CONFIG) && defined(MSWIN32) && !defined(MSWINRT_FLAVOR) \
-    && !defined(MSWIN_XBOX1)
+#if !defined(MSGBOX_ON_ERROR) && !defined(NO_MSGBOX_ON_ERROR)                \
+    && defined(MSWIN32) && !defined(MSWINRT_FLAVOR) && !defined(MSWIN_XBOX1) \
+    && !defined(SMALL_CONFIG)
 /* Show a Windows message box with "OK" button on a GC fatal error.   */
 /* Client application is terminated once the user clicks the button.  */
 #  define MSGBOX_ON_ERROR

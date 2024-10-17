@@ -64,7 +64,7 @@ EXTERN_C_BEGIN
 
 #    elif defined(LINUX) && GC_GNUC_PREREQ(3, 3) /* && !HOST_ANDROID */
 #      if defined(ARM32) || defined(AVR32)
-/* TODO: support Linux/arm */
+/* TODO: change to USE_COMPILER_TLS on Linux/arm */
 #        define USE_PTHREAD_SPECIFIC
 #      elif defined(AARCH64) && defined(__clang__) && !GC_CLANG_PREREQ(8, 0)
 /* To avoid "R_AARCH64_ABS64 used with TLS symbol" linker warnings. */
@@ -73,12 +73,12 @@ EXTERN_C_BEGIN
 #        define USE_COMPILER_TLS
 #      endif
 
-#    elif (defined(FREEBSD)                                                   \
+#    elif (defined(COSMO) || defined(FREEBSD)                                 \
            || (defined(NETBSD) && __NetBSD_Version__ >= 600000000 /* 6.0 */)) \
         && (GC_GNUC_PREREQ(4, 4) || GC_CLANG_PREREQ(3, 9))
 #      define USE_COMPILER_TLS
 
-#    elif defined(GC_HPUX_THREADS)
+#    elif defined(HPUX)
 #      ifdef __GNUC__
 /* Empirically, as of gcc 3.3, USE_COMPILER_TLS doesn't work. */
 #        define USE_PTHREAD_SPECIFIC
@@ -86,9 +86,8 @@ EXTERN_C_BEGIN
 #        define USE_COMPILER_TLS
 #      endif
 
-#    elif defined(GC_IRIX_THREADS) || defined(GC_OPENBSD_THREADS)  \
-        || defined(GC_SOLARIS_THREADS) || defined(NN_PLATFORM_CTR) \
-        || defined(NN_BUILD_TARGET_PLATFORM_NX)
+#    elif defined(IRIX5) || defined(OPENBSD) || defined(SOLARIS) \
+        || defined(NN_PLATFORM_CTR) || defined(NN_BUILD_TARGET_PLATFORM_NX)
 #      define USE_CUSTOM_SPECIFIC /* Use our own. */
 
 #    else
